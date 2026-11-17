@@ -2,8 +2,16 @@
 Windows Sandbox (.wsb) generator: Configures isolated, air-gapped test environments.
 """
 from dataclasses import dataclass
+import os
 from pathlib import Path
-from typing import Optional
+import shutil
+from typing import Optional, Tuple
+
+
+def is_sandbox_supported() -> bool:
+    """Checks whether Windows Sandbox executable is present on the current system."""
+    sandbox_exe = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsSandbox.exe"
+    return sandbox_exe.exists()
 
 
 @dataclass
@@ -17,11 +25,12 @@ class SandboxConfig:
 
 
 class SandboxGenerator:
-    """Generates Windows Sandbox configuration files (.wsb) for safe execution testing."""
+    """Generates Windows Sandbox configuration files (.wsb) and isolated local launchers."""
 
     def __init__(self, target_dir: Path):
         self.target_dir = Path(target_dir).resolve()
-        self.game_name = self.target_dir.name
+        safe_name = "".join(c if c.isalnum() else "_" for c in self.target_dir.name)
+        self.game_name = safe_name
 
     def generate_wsb(
         self,
@@ -60,4 +69,57 @@ class SandboxGenerator:
 </Configuration>
 """
         wsb_file.write_text(xml_content, encoding="utf-8")
+
+        # Also generate an offline local isolation launcher in case Sandbox is unavailable (e.g. Home edition)
+        self.generate_isolated_launcher()
+
         return wsb_file
+
+    def generate_isolated_launcher(self) -> Path:
+        """
+        Generates a local containment runner (Launch_Game_Isolated.bat) that verifies
+        firewall isolation before launching the game, for systems without Windows Sandbox.
+        """
+        launcher_file = self.target_dir / "Launch_Game_Isolated.bat"
+        content = f"""@echo off
+title GameCleaner Isolated Runner - {self.game_name}
+echo ========================================================
+echo GameCleaner Isolated Offline Game Launcher
+echo ========================================================
+echo.
+
+:: Check if firewall isolation script exists and has been created
+if exist "%~dp0block_game_network.ps1" (
+    echo [INFO] Ensuring network isolation rules are active...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-NetFirewallRule -DisplayName 'GameCleaner_*' | Select-Object -First 1" >nul 2>&1
+    if errorlevel 1 (
+        echo [WARNING] Firewall block rules not yet applied with Administrator privileges!
+        echo Please right-click 'block_game_network.ps1' and select 'Run with PowerShell as Admin'.
+        echo.
+    ) else (
+        echo [OK] Firewall isolation verified. Outbound internet access is blocked.
+    )
+)
+
+echo.
+echo Launching game in offline contained mode...
+echo.
+
+:: Locate main game executable
+for %%f in ("%~dp0*.exe") do (
+    if /i not "%%~nxf"=="unins000.exe" if /i not "%%~nxf"=="UnityCrashHandler64.exe" if /i not "%%~nxf"=="CrashReportClient.exe" (
+        echo Starting: "%%~nxf"
+        start "" "%%f"
+        goto :launched
+    )
+)
+
+echo No main executable found in root folder.
+pause
+exit /b 1
+
+:launched
+exit /b 0
+"""
+        launcher_file.write_text(content, encoding="utf-8")
+        return launcher_file

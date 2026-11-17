@@ -1,6 +1,7 @@
 """
 Windows Firewall containment manager: Blocks inbound and outbound network access for game executables.
 """
+import ctypes
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -8,12 +9,20 @@ import subprocess
 from typing import List, Tuple
 
 
+def is_running_as_admin() -> bool:
+    """Checks whether current process has Windows Administrator privileges."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
 @dataclass
 class FirewallRuleResult:
     executable: str
     rule_name: str
     direction: str  # Outbound / Inbound
-    status: str     # Created / Failed / ScriptOnly
+    status: str     # Applied / Requires Admin / Failed
 
 
 class FirewallManager:
@@ -21,7 +30,9 @@ class FirewallManager:
 
     def __init__(self, target_dir: Path):
         self.target_dir = Path(target_dir).resolve()
-        self.rule_prefix = f"GameCleaner_{self.target_dir.name}"
+        # Clean rule prefix to avoid special characters in PowerShell rule names
+        safe_prefix = "".join(c if c.isalnum() else "_" for c in self.target_dir.name)
+        self.rule_prefix = f"GameCleaner_{safe_prefix}"
 
     def find_executables(self) -> List[Path]:
         """Finds all executables in the target directory, excluding tools/quarantine."""
@@ -35,90 +46,110 @@ class FirewallManager:
     def generate_scripts(self) -> Tuple[Path, Path]:
         """
         Generates both block and unblock PowerShell (.ps1) scripts in the target directory.
-        These can be run by an administrator anytime.
+        These use fast array batching and can be executed as Administrator.
         """
         exes = self.find_executables()
         block_script_path = self.target_dir / "block_game_network.ps1"
         unblock_script_path = self.target_dir / "unblock_game_network.ps1"
 
-        # Build block script
-        block_lines = [
-            "# GameCleaner Outbound/Inbound Network Isolation Script",
-            "# Run this script in PowerShell as Administrator",
-            "Write-Host 'Applying GameCleaner Network Firewall Isolation...' -ForegroundColor Cyan",
-            "",
-        ]
+        exe_paths_ps = ",\n    ".join([f'"{str(e)}"' for e in exes])
 
-        for exe in exes:
-            safe_name = f"{self.rule_prefix}_{exe.stem}"
-            block_lines.extend([
-                f"# Rule for: {exe.name}",
-                f'Remove-NetFirewallRule -DisplayName "{safe_name}_Out" -ErrorAction SilentlyContinue',
-                f'New-NetFirewallRule -DisplayName "{safe_name}_Out" -Direction Outbound -Program "{exe}" -Action Block -Profile Any -Description "GameCleaner outbound containment rule"',
-                f'Remove-NetFirewallRule -DisplayName "{safe_name}_In" -ErrorAction SilentlyContinue',
-                f'New-NetFirewallRule -DisplayName "{safe_name}_In" -Direction Inbound -Program "{exe}" -Action Block -Profile Any -Description "GameCleaner inbound containment rule"',
-                "",
-            ])
+        block_content = f"""# GameCleaner High-Performance Outbound/Inbound Network Isolation Script
+# Run this script in PowerShell as Administrator
 
-        block_lines.extend([
-            "Write-Host 'Firewall rules successfully applied. All game binaries are network-isolated.' -ForegroundColor Green",
-            "Pause",
-        ])
+Write-Host "Applying GameCleaner Network Firewall Isolation..." -ForegroundColor Cyan
 
-        # Build unblock script
-        unblock_lines = [
-            "# GameCleaner Network Firewall Rule Removal Script",
-            "# Run this script in PowerShell as Administrator",
-            "Write-Host 'Removing GameCleaner Network Firewall Rules...' -ForegroundColor Yellow",
-            "",
-        ]
+$exes = @(
+    {exe_paths_ps}
+)
 
-        for exe in exes:
-            safe_name = f"{self.rule_prefix}_{exe.stem}"
-            unblock_lines.extend([
-                f'Remove-NetFirewallRule -DisplayName "{safe_name}_Out" -ErrorAction SilentlyContinue',
-                f'Remove-NetFirewallRule -DisplayName "{safe_name}_In" -ErrorAction SilentlyContinue',
-            ])
+$successCount = 0
+$failCount = 0
 
-        unblock_lines.extend([
-            "Write-Host 'GameCleaner firewall rules removed.' -ForegroundColor Green",
-            "Pause",
-        ])
+foreach ($exe in $exes) {{
+    if (-not (Test-Path -LiteralPath $exe)) {{ continue }}
+    $exeName = [System.IO.Path]::GetFileNameWithoutExtension($exe)
+    $cleanName = $exeName -replace '[^a-zA-Z0-9_]', '_'
+    $ruleOut = "{self.rule_prefix}_" + $cleanName + "_Out"
+    $ruleIn = "{self.rule_prefix}_" + $cleanName + "_In"
 
-        block_script_path.write_text("\n".join(block_lines), encoding="utf-8")
-        unblock_script_path.write_text("\n".join(unblock_lines), encoding="utf-8")
+    try {{
+        Remove-NetFirewallRule -DisplayName $ruleOut -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName $ruleOut -Direction Outbound -Program $exe -Action Block -Profile Any -Description "GameCleaner outbound containment" | Out-Null
+
+        Remove-NetFirewallRule -DisplayName $ruleIn -ErrorAction SilentlyContinue
+        New-NetFirewallRule -DisplayName $ruleIn -Direction Inbound -Program $exe -Action Block -Profile Any -Description "GameCleaner inbound containment" | Out-Null
+
+        Write-Host "  [OK] Blocked: $exeName" -ForegroundColor Green
+        $successCount++
+    }} catch {{
+        Write-Host "  [FAIL] Could not block: $exeName ($($_.Exception.Message))" -ForegroundColor Red
+        $failCount++
+    }}
+}}
+
+Write-Host "`nIsolation complete: $successCount blocked, $failCount failed." -ForegroundColor Cyan
+Pause
+"""
+
+        unblock_content = f"""# GameCleaner Network Firewall Rule Removal Script
+# Run this script in PowerShell as Administrator
+
+Write-Host "Removing GameCleaner Network Firewall Rules..." -ForegroundColor Yellow
+
+$exes = @(
+    {exe_paths_ps}
+)
+
+foreach ($exe in $exes) {{
+    $exeName = [System.IO.Path]::GetFileNameWithoutExtension($exe)
+    $cleanName = $exeName -replace '[^a-zA-Z0-9_]', '_'
+    $ruleOut = "{self.rule_prefix}_" + $cleanName + "_Out"
+    $ruleIn = "{self.rule_prefix}_" + $cleanName + "_In"
+
+    Remove-NetFirewallRule -DisplayName $ruleOut -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName $ruleIn -ErrorAction SilentlyContinue
+    Write-Host "  [UNBLOCKED] $exeName" -ForegroundColor Yellow
+}}
+
+Write-Host "`nAll GameCleaner firewall rules removed." -ForegroundColor Green
+Pause
+"""
+
+        block_script_path.write_text(block_content, encoding="utf-8")
+        unblock_script_path.write_text(unblock_content, encoding="utf-8")
 
         return block_script_path, unblock_script_path
 
     def apply_firewall_rules(self) -> List[FirewallRuleResult]:
         """
-        Attempts to apply firewall rules directly using PowerShell.
-        If admin rights are required, falls back to generating the script.
+        Attempts to apply firewall rules directly using batched PowerShell.
+        If admin rights are required and missing, reports 'Requires Admin'.
         """
         exes = self.find_executables()
+        if not exes:
+            return []
+
+        admin = is_running_as_admin()
         results = []
+
+        if admin:
+            block_ps1, _ = self.generate_scripts()
+            try:
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(block_ps1)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                status = "Applied" if proc.returncode == 0 else "Execution Error"
+            except Exception:
+                status = "Execution Error"
+        else:
+            status = "Requires Admin (Use generated .ps1 script or UAC prompt)"
 
         for exe in exes:
             safe_name = f"{self.rule_prefix}_{exe.stem}"
-            # Test executing PowerShell command
-            ps_cmd = (
-                f'Remove-NetFirewallRule -DisplayName "{safe_name}_Out" -ErrorAction SilentlyContinue; '
-                f'New-NetFirewallRule -DisplayName "{safe_name}_Out" -Direction Outbound -Program "{exe}" -Action Block -Profile Any'
-            )
-            try:
-                proc = subprocess.run(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if proc.returncode == 0:
-                    status = "Applied"
-                else:
-                    status = "Requires Admin (Use generated .ps1 script)"
-            except Exception:
-                status = "Execution Error"
-
             results.append(FirewallRuleResult(
                 executable=exe.name,
                 rule_name=f"{safe_name}_Out",
@@ -127,3 +158,14 @@ class FirewallManager:
             ))
 
         return results
+
+    def request_elevation_and_apply(self) -> bool:
+        """Launches the generated block script with a Windows UAC elevation prompt."""
+        block_ps1, _ = self.generate_scripts()
+        try:
+            # Use PowerShell Start-Process -Verb RunAs to pop UAC prompt
+            cmd = f'Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File \\"{block_ps1}\\""'
+            subprocess.run(["powershell", "-NoProfile", "-Command", cmd], timeout=10)
+            return True
+        except Exception:
+            return False

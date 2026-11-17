@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 from typing import List, Optional, Tuple
 import urllib.request
@@ -37,6 +38,55 @@ class EmulatorReplacer:
             self.emulator_storage = Path(__file__).resolve().parent.parent.parent / "emulators" / "goldberg"
         self.backup_dir = self.target_dir / ".gamecleaner_backup"
 
+    def discover_appid(self, dll_parent_dir: Path) -> Optional[str]:
+        """
+        Discovers the true Steam AppID from steam_appid.txt, steam_settings, or repack INI files
+        (steam_emu.ini, codex.ini, flt.ini, Rune.ini, SteamConfig.ini, ALI213.ini, CreamAPI.ini).
+        """
+        # 1. Direct steam_appid.txt
+        direct_file = dll_parent_dir / "steam_appid.txt"
+        if direct_file.exists():
+            try:
+                val = direct_file.read_text(encoding="utf-8", errors="ignore").strip()
+                if val.isdigit() and len(val) >= 3:
+                    return val
+            except Exception:
+                pass
+
+        # 2. steam_settings/steam_appid.txt
+        settings_file = dll_parent_dir / "steam_settings" / "steam_appid.txt"
+        if settings_file.exists():
+            try:
+                val = settings_file.read_text(encoding="utf-8", errors="ignore").strip()
+                if val.isdigit() and len(val) >= 3:
+                    return val
+            except Exception:
+                pass
+
+        # 3. Check INI files across dll_parent, parent, and root target_dir
+        pattern = re.compile(
+            r"^\s*(?:AppId|AppID|SteamAppId|TargetAppId)\s*=\s*([0-9]{3,10})",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        candidate_dirs = [dll_parent_dir, dll_parent_dir.parent, self.target_dir]
+        seen_dirs = set()
+
+        for cdir in candidate_dirs:
+            cdir_res = cdir.resolve()
+            if cdir_res in seen_dirs or not cdir_res.exists():
+                continue
+            seen_dirs.add(cdir_res)
+
+            for ini_path in cdir_res.glob("*.ini"):
+                try:
+                    content = ini_path.read_text(encoding="utf-8", errors="ignore")
+                    match = pattern.search(content)
+                    if match:
+                        return match.group(1).strip()
+                except Exception:
+                    continue
+        return None
+
     def find_drm_targets(self) -> List[DRMTarget]:
         """Scans the game directory for Steam API DLLs and their configurations."""
         targets = []
@@ -46,21 +96,14 @@ class EmulatorReplacer:
             name_lower = path.name.lower()
             if name_lower in ("steam_api.dll", "steam_api64.dll"):
                 arch = "x64" if "64" in name_lower else "x86"
-                appid_file = path.parent / "steam_appid.txt"
-                has_appid = appid_file.exists()
-                appid_val = None
-                if has_appid:
-                    try:
-                        appid_val = appid_file.read_text().strip()
-                    except Exception:
-                        pass
+                appid_val = self.discover_appid(path.parent)
 
                 targets.append(DRMTarget(
                     dll_name=path.name,
                     architecture=arch,
                     full_path=path,
                     relative_path=str(path.relative_to(self.target_dir)),
-                    has_appid_file=has_appid,
+                    has_appid_file=bool(appid_val),
                     app_id=appid_val,
                 ))
         return targets
@@ -136,12 +179,15 @@ class EmulatorReplacer:
         except Exception as e:
             return False, f"Failed to overwrite {target.full_path.name}: {e}"
 
-        # Step 4: Ensure steam_appid.txt exists
+        # Step 4: Ensure steam_appid.txt and steam_settings exist with accurate AppID
+        chosen_appid = target.app_id or self.discover_appid(target.full_path.parent) or default_appid
         appid_file = target.full_path.parent / "steam_appid.txt"
-        if not appid_file.exists() or not appid_file.read_text().strip():
-            # 480 is Spacewar (the standard Steam SDK test appid) or keep existing
-            chosen_appid = target.app_id if target.app_id else default_appid
-            appid_file.write_text(chosen_appid)
+        appid_file.write_text(chosen_appid, encoding="utf-8")
+
+        # Also create steam_settings/steam_appid.txt for Goldberg emulator compatibility
+        goldberg_dir = target.full_path.parent / "steam_settings"
+        goldberg_dir.mkdir(parents=True, exist_ok=True)
+        (goldberg_dir / "steam_appid.txt").write_text(chosen_appid, encoding="utf-8")
 
         return True, f"Successfully replaced {target.dll_name} with clean open-source emulator."
 

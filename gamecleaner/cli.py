@@ -11,9 +11,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from gamecleaner.analyzer import PEScanner, ThreatSeverity
+from gamecleaner.analyzer import PEScanResult, PEScanner, ScriptScanResult, ThreatSeverity
 from gamecleaner.cleaner import EmulatorReplacer, QuarantineManager
-from gamecleaner.containment import FirewallManager, SandboxGenerator
+from gamecleaner.containment import FirewallManager, SandboxGenerator, is_running_as_admin, is_sandbox_supported
 from gamecleaner.pipeline import GameCleanerPipeline
 
 console = Console()
@@ -59,11 +59,19 @@ def handle_scan(args):
     table.add_column("Action", style="bold cyan")
 
     for res in results:
-        signed_str = "[green]Yes[/green]" if res.is_signed else "[dim]No[/dim]"
+        if isinstance(res, PEScanResult):
+            arch_str = res.architecture
+            entropy_str = f"{res.max_entropy:.2f}"
+            signed_str = f"[green]{res.signature_status}[/green]" if res.is_signed else f"[dim]{res.signature_status}[/dim]"
+        else:
+            arch_str = res.extension.upper()
+            entropy_str = "N/A"
+            signed_str = "[dim]N/A[/dim]"
+
         table.add_row(
             res.file_name,
-            res.architecture,
-            f"{res.max_entropy:.2f}",
+            arch_str,
+            entropy_str,
             signed_str,
             f"{res.threat_score}/100",
             get_severity_badge(res.overall_severity),
@@ -129,12 +137,20 @@ def handle_firewall(args):
     target = Path(args.path).resolve()
     fm = FirewallManager(target)
     block_ps1, unblock_ps1 = fm.generate_scripts()
+
+    elevated_msg = ""
+    if getattr(args, "elevate", False):
+        if fm.request_elevation_and_apply():
+            elevated_msg = "\n[bold green]UAC prompt launched![/bold green] Click 'Yes' to apply rules."
+        else:
+            elevated_msg = "\n[bold red]Failed to trigger UAC elevation.[/bold red]"
+
     console.print(Panel(
         f"[bold green]Firewall Isolation Scripts Generated:[/bold green]\n"
         f"• Block Script:   [cyan]{block_ps1}[/cyan]\n"
         f"• Unblock Script: [cyan]{unblock_ps1}[/cyan]\n\n"
         "[yellow]Tip:[/yellow] Right-click [bold]block_game_network.ps1[/bold] and choose 'Run with PowerShell' as Administrator "
-        "to block all inbound and outbound traffic for this game's executables.",
+        f"to block all inbound and outbound traffic for this game's executables.{elevated_msg}",
         title="Firewall Network Isolation",
     ))
 
@@ -143,13 +159,20 @@ def handle_sandbox(args):
     target = Path(args.path).resolve()
     sg = SandboxGenerator(target)
     wsb_file = sg.generate_wsb(read_only=not args.read_write, v_gpu=True, allow_network=False)
+    has_sandbox = is_sandbox_supported()
+
+    status_str = "[bold green]Supported[/bold green]" if has_sandbox else "[bold yellow]Windows Sandbox feature not detected (Common on Home Edition)[/bold yellow]"
+    offline_runner = target / "Launch_Game_Isolated.bat"
+
     console.print(Panel(
         f"[bold green]Windows Sandbox Profile Created:[/bold green]\n"
-        f"File: [cyan]{wsb_file}[/cyan]\n\n"
+        f"• WSB File: [cyan]{wsb_file}[/cyan]\n"
+        f"• Host Sandbox Status: {status_str}\n"
+        f"• Local Offline Runner: [cyan]{offline_runner}[/cyan]\n\n"
         "• Network: [bold red]Disabled[/bold red] (air-gapped)\n"
         f"• Mount Mode: [bold]{'Read-Write' if args.read_write else 'Read-Only'}[/bold]\n"
         "• 3D Virtual GPU: [bold green]Enabled[/bold green]\n\n"
-        "Double-click this file to launch the game inside an ephemeral, disposable sandbox without risking your PC.",
+        "Double-click the .wsb file on Windows Pro/Enterprise, or use [bold]Launch_Game_Isolated.bat[/bold] on Windows Home.",
         title="Windows Sandbox Containment",
     ))
 
@@ -195,6 +218,7 @@ def main():
     # firewall
     fw_p = subparsers.add_parser("firewall", help="Generate firewall isolation rules for all game executables")
     fw_p.add_argument("path", help="Path to game directory")
+    fw_p.add_argument("--elevate", action="store_true", help="Launch UAC prompt to apply rules immediately with Admin rights")
 
     # sandbox
     sb_p = subparsers.add_parser("sandbox", help="Generate Windows Sandbox (.wsb) air-gapped configuration")

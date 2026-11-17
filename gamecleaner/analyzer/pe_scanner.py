@@ -6,6 +6,7 @@ import hashlib
 import math
 import os
 from pathlib import Path
+import subprocess
 from typing import Any, Dict, List, Optional, Set
 import pefile
 
@@ -46,6 +47,8 @@ class PEScanResult:
     md5: str = ""
     sha256: str = ""
     is_signed: bool = False
+    has_security_directory: bool = False
+    signature_status: str = "NotSigned"  # Valid, NotSigned, HashMismatch, NotTrusted
     is_packed: bool = False
     packer_type: Optional[str] = None
     max_entropy: float = 0.0
@@ -86,6 +89,27 @@ def get_file_hashes(file_path: Path) -> tuple[str, str]:
             md5.update(chunk)
             sha256.update(chunk)
     return md5.hexdigest(), sha256.hexdigest()
+
+
+def check_authenticode_signature(file_path: Path) -> str:
+    """
+    Checks Authenticode cryptographic signature status on Windows.
+    Returns: 'Valid', 'NotSigned', 'HashMismatch', 'NotTrusted', or 'Unknown'.
+    """
+    if os.name != "nt":
+        return "Unknown"
+    try:
+        cmd = f"& {{ (Get-AuthenticodeSignature -LiteralPath '{file_path}').Status.ToString() }}"
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        status = proc.stdout.strip()
+        return status if status else "Unknown"
+    except Exception:
+        return "Unknown"
 
 
 class PEScanner:
@@ -164,14 +188,33 @@ class PEScanner:
             elif pe.FILE_HEADER.Machine == 0xAA64:
                 result.architecture = "ARM64"
 
-            # Check digital signature directory
+            # Check digital signature directory & Authenticode cryptographic validity
             security_dir = pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"]
             if (
                 len(pe.OPTIONAL_HEADER.DATA_DIRECTORY) > security_dir
                 and pe.OPTIONAL_HEADER.DATA_DIRECTORY[security_dir].VirtualAddress != 0
                 and pe.OPTIONAL_HEADER.DATA_DIRECTORY[security_dir].Size > 0
             ):
-                result.is_signed = True
+                result.has_security_directory = True
+
+            # Perform true cryptographic signature check on Windows
+            result.signature_status = check_authenticode_signature(file_path)
+            result.is_signed = (result.signature_status == "Valid")
+
+            if result.has_security_directory and result.signature_status == "HashMismatch":
+                result.findings.append(ThreatFinding(
+                    category=ThreatCategory.INJECTION.value,
+                    severity=ThreatSeverity.CRITICAL.value,
+                    name="Tampered / Forged Digital Signature",
+                    details="Embedded certificate hash does not match binary contents (malware patching indicator)",
+                ))
+            elif result.has_security_directory and result.signature_status in ("NotTrusted", "UnknownError"):
+                result.findings.append(ThreatFinding(
+                    category=ThreatCategory.PACKED_OBFUSCATED.value,
+                    severity=ThreatSeverity.MEDIUM.value,
+                    name="Untrusted Digital Certificate",
+                    details=f"Digital signature status is {result.signature_status} (untrusted or self-signed cert)",
+                ))
 
             # Sections and Entropy
             self._analyze_sections(pe, result)
@@ -327,7 +370,7 @@ class PEScanner:
                 score += 2
 
         # Trust discount for validly signed binaries (prevents flagging legitimate OS / signed game engines)
-        if result.is_signed and critical_count == 0:
+        if result.is_signed and result.signature_status == "Valid" and critical_count == 0:
             score = max(0, score - 50)
             high_count = 0
             medium_count = 0
