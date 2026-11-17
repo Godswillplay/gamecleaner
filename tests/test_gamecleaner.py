@@ -15,7 +15,7 @@ from gamecleaner.pipeline import GameCleanerPipeline
 class TestGameCleaner(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="gamecleaner_test_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="gamecleaner_test_")).resolve()
         self.explorer_path = Path(r"C:\Windows\explorer.exe")
 
     def tearDown(self):
@@ -97,7 +97,7 @@ class TestGameCleaner(unittest.TestCase):
         self.assertIn("<Networking>Disable</Networking>", xml_content)
         self.assertIn("<VGpu>Enable</VGpu>", xml_content)
         self.assertIn("<ReadOnly>true</ReadOnly>", xml_content)
-        self.assertIn(str(self.test_dir), xml_content)
+        self.assertIn(str(self.test_dir.resolve()), xml_content)
 
     def test_emulator_replacer_detection(self):
         er = EmulatorReplacer(self.test_dir)

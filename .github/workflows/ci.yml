@@ -32,18 +32,4 @@ jobs:
     - name: Run automated test suite
       shell: cmd
       run: |
-        python -m unittest discover tests -v 1> test_output.log 2>&1
-        set TEST_EXIT=%ERRORLEVEL%
-        type test_output.log
-        exit /b %TEST_EXIT%
-
-    - name: Add Test Output to Step Summary
-      if: always()
-      shell: powershell
-      run: |
-        if (Test-Path test_output.log) {
-          "### Test Output (Python ${{ matrix.python-version }})" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "```text" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          Get-Content test_output.log | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-        }
+        python -m unittest discover tests -v
