@@ -30,8 +30,8 @@ class FirewallManager:
 
     def __init__(self, target_dir: Path):
         self.target_dir = Path(target_dir).resolve()
-        # Clean rule prefix to avoid special characters in PowerShell rule names
-        safe_prefix = "".join(c if c.isalnum() else "_" for c in self.target_dir.name)
+        # Clean rule prefix to avoid special characters in PowerShell rule names and keep well under 255-char limit
+        safe_prefix = "".join(c if c.isalnum() else "_" for c in self.target_dir.name)[:40]
         self.rule_prefix = f"GameCleaner_{safe_prefix}"
 
     def find_executables(self) -> List[Path]:
@@ -52,7 +52,9 @@ class FirewallManager:
         block_script_path = self.target_dir / "block_game_network.ps1"
         unblock_script_path = self.target_dir / "unblock_game_network.ps1"
 
-        exe_paths_ps = ",\n    ".join([f'"{str(e)}"' for e in exes])
+        # Safe single-quote literal paths for PowerShell (escapes ' as '')
+        escaped_paths = [f"'{str(e).replace(chr(39), chr(39)+chr(39))}'" for e in exes]
+        exe_paths_ps = ",\n    ".join(escaped_paths)
 
         block_content = f"""# GameCleaner High-Performance Outbound/Inbound Network Isolation Script
 # Run this script in PowerShell as Administrator
@@ -69,7 +71,8 @@ $failCount = 0
 foreach ($exe in $exes) {{
     if (-not (Test-Path -LiteralPath $exe)) {{ continue }}
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($exe)
-    $cleanName = $exeName -replace '[^a-zA-Z0-9_]', '_'
+    $cleanName = ($exeName -replace '[^a-zA-Z0-9_]', '_')
+    if ($cleanName.Length -gt 40) {{ $cleanName = $cleanName.Substring(0, 40) }}
     $ruleOut = "{self.rule_prefix}_" + $cleanName + "_Out"
     $ruleIn = "{self.rule_prefix}_" + $cleanName + "_In"
 
@@ -77,10 +80,11 @@ foreach ($exe in $exes) {{
         Remove-NetFirewallRule -DisplayName $ruleOut -ErrorAction SilentlyContinue
         New-NetFirewallRule -DisplayName $ruleOut -Direction Outbound -Program $exe -Action Block -Profile Any -Description "GameCleaner outbound containment" | Out-Null
 
+        # Block Inbound on Public/Untrusted networks to prevent external access, while permitting local loopback sockets on Private profiles
         Remove-NetFirewallRule -DisplayName $ruleIn -ErrorAction SilentlyContinue
-        New-NetFirewallRule -DisplayName $ruleIn -Direction Inbound -Program $exe -Action Block -Profile Any -Description "GameCleaner inbound containment" | Out-Null
+        New-NetFirewallRule -DisplayName $ruleIn -Direction Inbound -Program $exe -Action Block -Profile Public -Description "GameCleaner inbound public containment" | Out-Null
 
-        Write-Host "  [OK] Blocked: $exeName" -ForegroundColor Green
+        Write-Host "  [OK] Isolated: $exeName" -ForegroundColor Green
         $successCount++
     }} catch {{
         Write-Host "  [FAIL] Could not block: $exeName ($($_.Exception.Message))" -ForegroundColor Red

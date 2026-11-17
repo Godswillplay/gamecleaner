@@ -1,6 +1,8 @@
 """
 Static PE (Portable Executable) binary scanner and entropy analyzer.
 """
+import ctypes
+from ctypes import wintypes
 from dataclasses import dataclass, field
 import hashlib
 import math
@@ -12,11 +14,92 @@ import pefile
 
 from gamecleaner.analyzer.threat_rules import (
     SENSITIVE_APIS,
+    STANDARD_EOS_EXPORTS,
     STANDARD_STEAM_EXPORTS,
+    STANDARD_UBISOFT_EXPORTS,
     SUSPICIOUS_STRING_PATTERNS,
     ThreatCategory,
     ThreatSeverity,
 )
+
+# Win32 WinVerifyTrust structures for microsecond, injection-proof Authenticode verification
+if os.name == "nt":
+    class _GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", wintypes.BYTE * 8),
+        ]
+
+    class _WINTRUST_FILE_INFO(ctypes.Structure):
+        _fields_ = [
+            ("cbStruct", wintypes.DWORD),
+            ("pcwszFilePath", wintypes.LPCWSTR),
+            ("hFile", wintypes.HANDLE),
+            ("pgKnownSubject", ctypes.c_void_p),
+        ]
+
+    class _WINTRUST_DATA(ctypes.Structure):
+        _fields_ = [
+            ("cbStruct", wintypes.DWORD),
+            ("pPolicyCallbackData", ctypes.c_void_p),
+            ("pSIPClientData", ctypes.c_void_p),
+            ("dwUIChoice", wintypes.DWORD),
+            ("fdwRevocationChecks", wintypes.DWORD),
+            ("dwUnionChoice", wintypes.DWORD),
+            ("pFile", ctypes.POINTER(_WINTRUST_FILE_INFO)),
+            ("dwStateAction", wintypes.DWORD),
+            ("hWVTStateData", wintypes.HANDLE),
+            ("pwszURLReference", wintypes.LPCWSTR),
+            ("dwProvFlags", wintypes.DWORD),
+            ("dwUIContext", wintypes.DWORD),
+            ("pSignatureSettings", ctypes.c_void_p),
+        ]
+
+    _WINTRUST_ACTION_GENERIC_VERIFY_V2 = _GUID(
+        0x00AAC56B, 0xCD44, 0x11D0, (wintypes.BYTE * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE)
+    )
+
+    def _verify_trust_win32(file_path: str) -> str:
+        """Calls WinVerifyTrust directly via Win32 API in microseconds."""
+        file_info = _WINTRUST_FILE_INFO(
+            cbStruct=ctypes.sizeof(_WINTRUST_FILE_INFO),
+            pcwszFilePath=file_path,
+            hFile=None,
+            pgKnownSubject=None,
+        )
+        wintrust_data = _WINTRUST_DATA(
+            cbStruct=ctypes.sizeof(_WINTRUST_DATA),
+            pPolicyCallbackData=None,
+            pSIPClientData=None,
+            dwUIChoice=2,  # WTD_UI_NONE
+            fdwRevocationChecks=0,  # WTD_REVOKE_NONE
+            dwUnionChoice=1,  # WTD_CHOICE_FILE
+            pFile=ctypes.pointer(file_info),
+            dwStateAction=1,  # WTD_STATEACTION_VERIFY
+            hWVTStateData=None,
+            pwszURLReference=None,
+            dwProvFlags=0x00000040,  # WTD_CACHE_ONLY_URL_RETRIEVAL
+            dwUIContext=0,
+            pSignatureSettings=None,
+        )
+        wintrust = ctypes.windll.wintrust
+        status = wintrust.WinVerifyTrust(None, ctypes.byref(_WINTRUST_ACTION_GENERIC_VERIFY_V2), ctypes.byref(wintrust_data))
+        wintrust_data.dwStateAction = 2  # WTD_STATEACTION_CLOSE
+        wintrust.WinVerifyTrust(None, ctypes.byref(_WINTRUST_ACTION_GENERIC_VERIFY_V2), ctypes.byref(wintrust_data))
+
+        # Check return code
+        if status == 0:
+            return "Valid"
+        elif status == -2146869232:  # 0x80096010 TRUST_E_BAD_DIGEST
+            return "HashMismatch"
+        elif status == -2146762487:  # 0x800B0109 CERT_E_UNTRUSTEDROOT
+            return "NotTrusted"
+        elif status == -2146762496:  # 0x800B0100 TRUST_E_NOSIGNATURE
+            return "NotSigned"
+        return "NotSigned"
+
 
 
 @dataclass
@@ -94,22 +177,41 @@ def get_file_hashes(file_path: Path) -> tuple[str, str]:
 def check_authenticode_signature(file_path: Path) -> str:
     """
     Checks Authenticode cryptographic signature status on Windows.
+    Uses native WinVerifyTrust (microsecond performance, immune to shell injection)
+    with a safe parameterized PowerShell fallback for catalog-signed Windows system files.
     Returns: 'Valid', 'NotSigned', 'HashMismatch', 'NotTrusted', or 'Unknown'.
     """
     if os.name != "nt":
         return "Unknown"
+
+    file_path = Path(file_path)
+    file_str = str(file_path.resolve())
+
+    # 1. Native WinVerifyTrust check (instant, no subprocess overhead)
     try:
-        cmd = f"& {{ (Get-AuthenticodeSignature -LiteralPath '{file_path}').Status.ToString() }}"
-        proc = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        status = proc.stdout.strip()
-        return status if status else "Unknown"
+        trust_status = _verify_trust_win32(file_str)
+        if trust_status in ("Valid", "HashMismatch", "NotTrusted"):
+            return trust_status
     except Exception:
-        return "Unknown"
+        trust_status = "NotSigned"
+
+    # 2. For Windows system catalog-signed files (only in Windows system directories)
+    if "windows" in file_str.lower():
+        try:
+            # Use param($p) so file paths with quotes/spaces are passed strictly as data, never evaluated
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", "param($p) (Get-AuthenticodeSignature -LiteralPath $p).Status.ToString()", "-p", file_str],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            ps_status = proc.stdout.strip()
+            if ps_status:
+                return ps_status
+        except Exception:
+            pass
+
+    return trust_status
 
 
 class PEScanner:
@@ -312,7 +414,7 @@ class PEScanner:
                 if exp.name:
                     result.exports.append(exp.name.decode(errors="ignore"))
 
-        # Check if it acts as a Steamworks wrapper
+        # Check if it acts as a Steamworks, Epic, or Ubisoft DRM wrapper
         file_lower = result.file_name.lower()
         if "steam_api" in file_lower or any(e in STANDARD_STEAM_EXPORTS for e in result.exports):
             result.is_steam_wrapper = True
@@ -324,6 +426,24 @@ class PEScanner:
                     name="Steamworks API Wrapper Hook",
                     details=f"Exports {matched_steam} standard Steam API functions (Crack/Emulator hook)",
                 ))
+        elif "eossdk" in file_lower or any(e in STANDARD_EOS_EXPORTS for e in result.exports):
+            result.is_steam_wrapper = True  # Safe DRM emulator hook
+            matched_eos = sum(1 for e in result.exports if e in STANDARD_EOS_EXPORTS)
+            result.findings.append(ThreatFinding(
+                category=ThreatCategory.HACKTOOL_CRACK.value,
+                severity=ThreatSeverity.LOW.value,
+                name="Epic Online Services API Hook",
+                details=f"Exports {matched_eos} standard EOS functions (Epic DRM hook)",
+            ))
+        elif "uplay_r1_loader" in file_lower or any(e in STANDARD_UBISOFT_EXPORTS for e in result.exports):
+            result.is_steam_wrapper = True  # Safe DRM emulator hook
+            matched_uplay = sum(1 for e in result.exports if e in STANDARD_UBISOFT_EXPORTS)
+            result.findings.append(ThreatFinding(
+                category=ThreatCategory.HACKTOOL_CRACK.value,
+                severity=ThreatSeverity.LOW.value,
+                name="Ubisoft Connect Uplay Loader Hook",
+                details=f"Exports {matched_uplay} standard Uplay functions (Ubisoft DRM hook)",
+            ))
 
     def _scan_strings(self, file_path: Path, result: PEScanResult):
         try:
@@ -393,7 +513,7 @@ class PEScanner:
         elif high_count > 0:
             result.overall_severity = ThreatSeverity.HIGH.value
             result.verdict = "HIGH RISK: Suspicious Injection / Downloader"
-            result.recommended_action = "QUARANTINE"
+            result.recommended_action = "QUARANTINE" if result.threat_score >= 60 else "FIREWALL_BLOCK"
         elif result.is_steam_wrapper and not result.is_signed:
             result.overall_severity = ThreatSeverity.MEDIUM.value
             result.verdict = "SUSPICIOUS: Untrusted DRM Emulator Hook"

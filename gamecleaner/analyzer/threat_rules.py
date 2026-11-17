@@ -100,8 +100,8 @@ SENSITIVE_APIS: Dict[str, Dict[str, str]] = {
     },
     "GetClipboardData": {
         "category": ThreatCategory.KEYLOGGER_SPYWARE.value,
-        "severity": ThreatSeverity.HIGH.value,
-        "description": "Reads clipboard data (often targeting crypto wallet addresses)",
+        "severity": ThreatSeverity.LOW.value,
+        "description": "Reads clipboard data (standard game UI text paste, or suspicious crypto clippers)",
     },
 
     # Hidden Network Downloader / C2 Exfiltration
@@ -214,3 +214,27 @@ STANDARD_STEAM_EXPORTS: Set[str] = {
     "SteamApps",
     "SteamNetworking",
 }
+
+# Standard Epic Online Services exports
+STANDARD_EOS_EXPORTS: Set[str] = {
+    "EOS_Initialize",
+    "EOS_Shutdown",
+    "EOS_Platform_Create",
+    "EOS_Platform_Tick",
+    "EOS_Platform_Release",
+    "EOS_Platform_GetAuthInterface",
+    "EOS_Platform_GetConnectInterface",
+    "EOS_EResult_ToString",
+}
+
+# Standard Ubisoft Connect / Uplay exports
+STANDARD_UBISOFT_EXPORTS: Set[str] = {
+    "UPLAY_START",
+    "UPLAY_QUIT",
+    "UPLAY_GetLastError",
+    "UPLAY_USER_GetAccountId",
+    "UPLAY_USER_GetUsername",
+    "UPLAY_SAVE_GetSaveList",
+    "UPLAY_ACH_GetAchievements",
+}
+

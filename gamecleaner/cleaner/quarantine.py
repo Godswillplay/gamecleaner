@@ -1,12 +1,38 @@
 """
 Quarantine manager: Safely isolates and neutralizes malicious binaries.
 """
+import ctypes
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
 from typing import Dict, List, Optional
+
+MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004
+
+
+def remove_readonly(path: Path):
+    """Strips read-only and system attributes so files can be deleted or moved."""
+    try:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    except Exception:
+        pass
+
+
+def to_win32_long_path(path: Path) -> Path:
+    """Prepends \\?\\ to absolute paths on Windows to bypass MAX_PATH 260 character limits."""
+    if os.name != "nt":
+        return path
+    p_str = str(path.resolve())
+    if not p_str.startswith("\\\\?\\") and not p_str.startswith("\\\\.\\"):
+        if p_str.startswith("\\\\"):
+            return Path("\\\\?\\UNC\\" + p_str[2:])
+        return Path("\\\\?\\" + p_str)
+    return path
+
 
 
 @dataclass
@@ -70,22 +96,72 @@ class QuarantineManager:
         quarantined_name = f"{file_path.name}_{timestamp_str}.quarantined"
         dest_path = self.quarantine_dir / quarantined_name
 
+        remove_readonly(file_path)
+
+        # Attempt 1: Standard atomic move
         try:
             shutil.move(str(file_path), str(dest_path))
-        except Exception as e:
-            # Fallback copy and remove if move fails
-            shutil.copy2(str(file_path), str(dest_path))
-            file_path.unlink()
+        except (PermissionError, OSError):
+            # Attempt 2: If locked by a running process, try to kill the locking process
+            try:
+                import psutil
+                for proc in psutil.process_iter(["pid", "name", "exe"]):
+                    try:
+                        exe_path = proc.info.get("exe")
+                        if exe_path and Path(exe_path).resolve() == file_path:
+                            proc.kill()
+                            proc.wait(timeout=2)
+                            break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+            except Exception:
+                pass
 
-        manifest[quarantined_name] = asdict(QuarantineRecord(
-            original_rel_path=rel_path,
-            quarantined_filename=quarantined_name,
-            sha256=sha256,
-            reason=reason,
-            timestamp=datetime.now().isoformat(),
-        ))
-        self._save_manifest(manifest)
-        return dest_path
+            # Try moving again after killing process
+            try:
+                shutil.move(str(file_path), str(dest_path))
+            except Exception:
+                pass
+
+        # Attempt 3: Rename-first evasion (works on NTFS even when binary is mapped in memory)
+        if file_path.exists() and not dest_path.exists():
+            try:
+                temp_renamed = file_path.with_name(f"{file_path.name}.gc_locked")
+                remove_readonly(file_path)
+                os.replace(file_path, temp_renamed)
+                shutil.move(str(temp_renamed), str(dest_path))
+            except Exception:
+                pass
+
+        # Attempt 4: Copy to quarantine and unlink source
+        if file_path.exists() and not dest_path.exists():
+            try:
+                shutil.copy2(str(file_path), str(dest_path))
+                remove_readonly(file_path)
+                file_path.unlink()
+            except Exception:
+                pass
+
+        # Attempt 5: If still locked on disk, schedule deletion upon Windows restart
+        if file_path.exists() and os.name == "nt":
+            try:
+                ctypes.windll.kernel32.MoveFileExW(str(file_path), None, MOVEFILE_DELAY_UNTIL_REBOOT)
+            except Exception:
+                pass
+
+        # Only update manifest if destination actually exists in quarantine
+        if dest_path.exists():
+            manifest[quarantined_name] = asdict(QuarantineRecord(
+                original_rel_path=rel_path,
+                quarantined_filename=quarantined_name,
+                sha256=sha256,
+                reason=reason,
+                timestamp=datetime.now().isoformat(),
+            ))
+            self._save_manifest(manifest)
+            return dest_path
+
+        return None
 
     def restore_file(self, quarantined_name: str) -> bool:
         """Restores a quarantined file back to its original path."""
@@ -101,6 +177,13 @@ class QuarantineManager:
             return False
 
         dest_file.parent.mkdir(parents=True, exist_ok=True)
+        remove_readonly(src_file)
+        if dest_file.exists():
+            remove_readonly(dest_file)
+            try:
+                dest_file.unlink()
+            except Exception:
+                pass
         shutil.move(str(src_file), str(dest_file))
 
         del manifest[quarantined_name]

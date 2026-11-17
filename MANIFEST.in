@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+include AGENTS.md
+include CLAUDE.md
+include SKILL.md
+include requirements.txt
+recursive-include emulators *
+recursive-include docs *

@@ -1,19 +1,26 @@
 # GameCleaner 🛡️🎮
 
-**GameCleaner** is an automated security triage, malware isolation, and containment framework for untrusted or cracked games and software.
+[![GameCleaner CI](https://github.com/OWNER/gamecleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/gamecleaner/actions)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)
+![Tests](https://img.shields.io/badge/tests-29%2F29%20passing-brightgreen.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
+![AI Agent Ready](https://img.shields.io/badge/AI%20Agent-Antigravity%20%7C%20Claude%20%7C%20Cursor-purple.svg)
 
-When users download cracked games or repacks, they frequently face two major problems:
-1. **Hostile Trojans & Stealers:** Shady repacks often bundle silent infostealers (e.g. Lumma, Redline, Vidar), XMRig cryptominers, or secondary droppers.
-2. **False Positives vs. Real Threats:** Antivirus heuristics flag all crack hooks (`steam_api64.dll`, memory injectors) as generic `HackTool` or `Riskware`, making it difficult to distinguish harmless DRM emulators from dangerous malware.
+**GameCleaner** is an automated security triage, malware isolation, clean emulator replacement, and containment framework for untrusted or cracked PC games and software.
 
-**GameCleaner solves this through a 3-pillar defense pipeline:**
-- **Pillar 1 — Deep Static PE, Script & Heuristic Triage:** Analyzes PE headers, section entropy (detecting packers/crypters), sensitive Windows API imports (credential theft, process injection, keylogging), payload signatures, and audits launcher scripts (`.bat`, `.cmd`, `.vbs`, `.ps1`) for hidden downloaders or droppers. Validates Windows Authenticode cryptographic signatures to catch certificate tampering. Queries VirusTotal by hash to separate `HackTool` heuristics from confirmed malware families.
-- **Pillar 2 — Clean-Room Emulator Replacement & Scene Config Discovery:** Automatically extracts the true Steam AppID from repack configuration files (`steam_emu.ini`, `codex.ini`, `flt.ini`, `Rune.ini`, `SteamConfig.ini`, `ALI213.ini`). Safely backs up untrusted, closed-source cracked DLLs (such as shady `steam_api64.dll` files) and replaces them with audited, open-source clean emulators (Goldberg Steam Emulator) so DLCs and saves work properly.
-- **Pillar 3 — OS Firewall Isolation & Contained Execution:** Automatically batches Windows Firewall rules blocking all outbound/inbound traffic for game executables (preventing credential exfiltration and C2 beaconing). Generates a one-click **Windows Sandbox (`.wsb`)** profile with virtualized 3D GPU acceleration and an offline local containment runner (`Launch_Game_Isolated.bat`) for Windows 11 Home users.
+It functions as **both a standalone Windows CLI/Shell security tool and an Autonomous Agent Skill (`SKILL.md`)** for Antigravity, Claude Code, and local AI workflows.
 
 ---
 
-## Architecture Overview
+## The Problem GameCleaner Solves
+When gamers install repacks or third-party game releases, they face two critical issues:
+1. **Silent Malware Payloads:** Shady repacks bundle infostealers (Lumma, Redline, Vidar), XMRig cryptominers, malicious scheduled tasks, and obfuscated `.lnk` shortcuts.
+2. **False Positives vs. Real Threats:** Antivirus heuristics flag all crack hooks (`steam_api64.dll`, memory loaders) as generic `HackTool`, making it difficult to separate harmless offline DRM bypasses from hostile trojans.
+
+---
+
+## 5-Pillar Security Architecture
 
 ```
                       ┌──────────────────────────────────────┐
@@ -21,24 +28,25 @@ When users download cracked games or repacks, they frequently face two major pro
                       └──────────────────┬───────────────────┘
                                          │
                    ┌─────────────────────▼─────────────────────┐
-                   │ Pillar 1: Static PE & Threat Triage       │
-                   │ • Section Entropy (Crypter Detection)     │
+                   │ Pillar 1: Static PE, Script & LNK Triage  │
+                   │ • Shannon Entropy (Crypter Detection)     │
+                   │ • Native Win32 WinVerifyTrust Signatures  │
                    │ • Sensitive API Imports (Stealers/Miners) │
-                   │ • String Signatures (Webhooks/Tokens)     │
-                   │ • VirusTotal Threat Family Analysis       │
+                   │ • MS-SHLLINK & LOLBin Parser (-enc/-w)    │
+                   │ • System Persistence Audit (Run/Tasks)    │
                    └─────────────────────┬─────────────────────┘
                                          │
          ┌───────────────────────────────┼──────────────────────────────┐
          ▼                               ▼                              ▼
 ┌──────────────────┐           ┌────────────────────┐         ┌────────────────────┐
 │ Clean Binaries   │           │ Untrusted DRM Hook │         │ Hostile Payload    │
-│ (Retain & Verify)│           │ (e.g. steam_api64) │         │ (Stealer / Miner)  │
+│ (Retain & Verify)│           │ (Steam / Epic / Ubi│         │ (Stealer / Miner)  │
 └────────┬─────────┘           └─────────┬──────────┘         └─────────┬──────────┘
          │                               │                              │
          │                     ┌─────────▼──────────┐         ┌─────────▼──────────┐
          │                     │ Pillar 2: Clean    │         │ Quarantine Vault   │
          │                     │ Emulator Replace   │         │ (.gamecleaner_     │
-         │                     │ (Goldberg Emu)     │         │  quarantine/)      │
+         │                     │ & Save Migration   │         │  quarantine/)      │
          │                     └─────────┬──────────┘         └────────────────────┘
          │                               │
          └───────────────────────────────┴──────────────────────────────┐
@@ -52,124 +60,96 @@ When users download cracked games or repacks, they frequently face two major pro
 
 ---
 
-## Installation
+## Key Features
 
-### Prerequisites
-- Windows 10 / 11 (64-bit)
-- Python 3.8+
-
-### Setup
-```powershell
-git clone https://github.com/your-username/gamecleaner.git
-cd gamecleaner
-pip install -e .
-```
-
-Dependencies installed: `pefile`, `rich`, `requests`.
-
----
-
-## Usage
-
-### 1. Run the Full Security Pipeline (`clean-all`)
-Performs the complete automated audit: scans binaries, quarantines hostile payloads, replaces untrusted DRM hooks with clean open-source emulators, generates network firewall blocking scripts, creates an air-gapped sandbox profile, and generates `gamecleaner_report.md`.
-
-```powershell
-gamecleaner clean-all "D:\Games\MyGameFolder"
-```
-
-Options:
-- `--no-quarantine`: Skip moving critical threats to the quarantine vault.
-- `--no-replace-emu`: Skip replacing Steam DRM hooks with Goldberg.
-- `--no-firewall`: Skip generating firewall isolation scripts.
-- `--no-sandbox`: Skip generating `.wsb` sandbox configuration.
+1. **Pre-Install Repack Extraction (`unpack`):**
+   - Unpacks Inno Setup (`setup.exe`), NSIS installers, and archives directly to disk without executing untrusted installer binaries.
+   - **Option during installation:** Automatically runs `clean-all` on the extracted files (`--clean`, enabled by default).
+2. **One-Click Windows Explorer Shell Integration (`setup --context-menu`):**
+   - Adds right-click **"Clean & Contain with GameCleaner"** to folders in Windows Explorer (writes to `HKCU`, requires zero administrator privileges).
+3. **Clean-Room Emulator Replacement (Multi-DRM):**
+   - Replaces untrusted Steam, Epic, and Ubisoft wrappers with verified clean open-source emulators (pre-bundled Goldberg Steam Emulator).
+   - Auto-queries Steam store API to reconstruct missing `DLC.txt` manifests.
+4. **Save Game & SteamID Identity Preservation:**
+   - Detects scene INI files (`steam_emu.ini`, `codex.ini`, `rune.ini`) and migrates existing save files so user game progress is never lost.
+5. **AI-Assisted Decompiler Triage:**
+   - Disassembles entry points and formats structured reverse-engineering prompts for Antigravity / Claude Code to evaluate benign crack logic vs. hostile payload injection.
+6. **Air-Gapped Containment:**
+   - Generates Windows Sandbox profiles (`.wsb`) with 3D vGPU acceleration and disables network connectivity.
 
 ---
 
-### 2. Scan and Triage Only (`scan`)
-Inspects all `.exe` and `.dll` files in a folder and outputs a color-coded triage table with threat scores (0–100), section entropy, signature validity, and verdicts.
+## CLI Usage Reference
+
+### 1. Full Security & Remediation Pipeline (`clean-all`)
+Runs the complete scan, AI triage, save migration, emulator replacement, quarantine, firewall scripts, and sandbox generation:
 
 ```powershell
-gamecleaner scan "D:\Games\MyGameFolder"
+python -m gamecleaner.cli clean-all "C:\Games\TargetGame"
 ```
 
-Optional: Set your VirusTotal API key to check threat intelligence feeds:
+### 2. Pre-Install Repack Unpacker (`unpack`)
+Extracts a repack or `setup.exe` safely without running untrusted code:
+
 ```powershell
-$env:VT_API_KEY="your_virustotal_api_key"
-gamecleaner scan "D:\Games\MyGameFolder"
+# Unpack and immediately auto-clean the extracted game during installation (Default)
+python -m gamecleaner.cli unpack "C:\Downloads\setup.exe" -o "C:\Games\TargetGame"
+
+# Unpack only without immediate cleaning
+python -m gamecleaner.cli unpack "C:\Downloads\setup.exe" -o "C:\Games\TargetGame" --no-clean
+```
+
+### 3. Save Game & SteamID Migrator (`migrate-saves`)
+Detects scene crack configurations and configures Goldberg identity and saves:
+
+```powershell
+python -m gamecleaner.cli migrate-saves "C:\Games\TargetGame"
+```
+
+### 4. Windows Explorer Shell Integration (`setup`)
+Registers the right-click context menu in Windows Explorer:
+
+```powershell
+# Check environment readiness
+python -m gamecleaner.cli setup --check
+
+# Register right-click "Clean with GameCleaner" menu
+python -m gamecleaner.cli setup --context-menu
+
+# Remove right-click context menu
+python -m gamecleaner.cli setup --remove-context-menu
+```
+
+### 5. Deep Reverse-Engineering Inspection (`inspect`)
+Compiles a full REA evidence dossier (Capstone disassembly, string cross-references, Steamworks interfaces):
+
+```powershell
+python -m gamecleaner.cli inspect "C:\Games\TargetGame\game.exe"
 ```
 
 ---
 
-### 3. Replace Untrusted DRM Hooks with Clean Emulators (`replace-emu`)
-Scans for `steam_api.dll` and `steam_api64.dll`, backs them up safely to `.gamecleaner_backup/`, and swaps them with verified clean open-source Goldberg emulators.
+## Proven Real-World Case Study: Sniper Elite Nazi Zombie Army (3.32 GB Repack)
 
-```powershell
-gamecleaner replace-emu "D:\Games\MyGameFolder"
-```
+GameCleaner was evaluated on a live 3.32 GB repack archive (`Sniper.Elite.Nazi.Zombie.Army.zip`):
+1. **Zero-Execution Unpack:** Unpacked 287 assets from Downloads directly to `D:\Games\` without running untrusted scripts.
+2. **Crack Neutralization:** Replaced an untrusted 87 KB closed-source `steam_api.dll` with an audited 9.19 MB Goldberg Steam emulator.
+3. **Playability Preservation:** Disambiguated `NZA.exe` keyboard/clipboard UI calls from actual malware; retained game executables while generating kernel-level firewall blocking scripts (`block_game_network.ps1`).
+4. **Air-Gapped Sandbox:** Created `Sandbox_Sniper_Elite_Nazi_Zombie_Army.wsb` for 1-click ephemeral execution.
 
-You can also provide your own compiled/audited clean DLL:
-```powershell
-gamecleaner replace-emu "D:\Games\MyGameFolder" --custom-dll "C:\path\to\clean_steam_api64.dll"
-```
+*Detailed technical dossier and beginner cheat sheet:* [docs/CASE_STUDY_SNIPER_ELITE.md](docs/CASE_STUDY_SNIPER_ELITE.md)
 
 ---
 
-### 4. Firewall Network Isolation (`firewall`)
-Generates `block_game_network.ps1` and `unblock_game_network.ps1` in the game directory. 
-Executing `block_game_network.ps1` as Administrator adds Windows Firewall rules that completely block outbound and inbound network traffic for every executable in the folder.
-
-```powershell
-gamecleaner firewall "D:\Games\MyGameFolder"
-```
-> **Why this matters:** Offline single-player games never need internet. Blocking outbound traffic neutralizes infostealer exfiltration, C2 beacons, and background cryptominers even if an undetected script is present.
-
----
-
-### 5. Windows Sandbox Isolation (`sandbox`)
-Generates an air-gapped `Sandbox_<GameName>.wsb` file.
-
-```powershell
-gamecleaner sandbox "D:\Games\MyGameFolder"
-```
-Double-clicking the `.wsb` file starts an isolated, throwaway Windows virtual machine with:
-- `<Networking>Disable</Networking>` (fully air-gapped).
-- `<VGpu>Enable</VGpu>` (DirectX/Vulkan hardware acceleration enabled for 3D games).
-- The game folder mounted to `C:\TestingGame` in read-only mode.
-
----
-
-## Running Tests
+## Running the Automated Test Suite
 
 ```powershell
 python -m unittest discover tests
 ```
 
+All 29 tests pass across PE scanning, Authenticode verification, LNK analysis, save migration, repack unpacking, and firewall generation.
+
 ---
 
-## Project Structure
-
-```
-gamecleaner/
-├── gamecleaner/
-│   ├── analyzer/
-│   │   ├── pe_scanner.py         # PE headers, imports, entropy, threat score
-│   │   ├── threat_rules.py       # API signatures (stealer/miner/dropper rules)
-│   │   └── virustotal.py         # VirusTotal v3 API hash lookup
-│   ├── cleaner/
-│   │   ├── quarantine.py         # Safe file isolation and restore manager
-│   │   └── emu_replacer.py       # Goldberg clean emulator installer & backup
-│   ├── containment/
-│   │   ├── firewall.py           # Windows Firewall isolation script generator
-│   │   └── sandbox.py            # Windows Sandbox (.wsb) generator
-│   ├── pipeline.py               # Full end-to-end orchestration
-│   └── cli.py                    # Rich CLI command interface
-├── tests/
-│   ├── test_gamecleaner.py       # Unit tests for individual components
-│   └── test_pipeline_e2e.py      # End-to-end integration test
-├── setup.py
-└── README.md
-```
-
 ## Security & Ethics Notice
-GameCleaner is a defensive security triage and quarantine tool designed to protect users' personal systems from malware, trojans, and surveillance payloads frequently bundled in third-party downloads. It does not generate malware or crack games.
+GameCleaner is a defensive security triage and quarantine tool designed to protect personal systems from malware, trojans, and surveillance payloads frequently bundled in third-party downloads. It does not generate malware or crack games.

@@ -1,19 +1,35 @@
-# Byte-compiled / optimized / DLL files
+# Python Bytecode and cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
 build/
 dist/
+.pytest_cache/
+.coverage
+htmlcov/
 
-# GameCleaner local quarantine and backups
+# Local GameCleaner quarantine and runtime backups
 .gamecleaner_quarantine/
 .gamecleaner_backup/
 *.quarantined
 *.bak
+*.gc_old
+*.wsb
+block_game_network.ps1
+unblock_game_network.ps1
+Launch_Game_Isolated.bat
+gamecleaner_report.md
+gamecleaner_report.json
+REA_EVIDENCE_*.md
+out.txt
 
-# Environment and logs
-.env
-*.log
+# Editor and OS files
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
+
+# Environment variables and local credentials
+.env
+*.local
