@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+
+# GameCleaner local quarantine and backups
+.gamecleaner_quarantine/
+.gamecleaner_backup/
+*.quarantined
+*.bak
+
+# Environment and logs
+.env
+*.log
+.vscode/
+.idea/
