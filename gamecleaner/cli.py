@@ -226,6 +226,63 @@ def handle_inspect(args):
     console.print(dossier[:1500] + ("\n... [truncated for display, see full file]" if len(dossier) > 1500 else ""))
 
 
+def handle_setup(args):
+    from gamecleaner.rea.setup_manager import REASetupManager
+    manager = REASetupManager()
+
+    console.print(Panel(
+        "[bold cyan]GameCleaner & REA Automated Environment Setup[/bold cyan]\n"
+        "Verifying Java, Node.js, REA MCP Server, and Ghidra Decompilation Engine...",
+        title="Setup & Diagnostics",
+    ))
+
+    status = manager.check_environment()
+
+    status_table = Table(title="Environment Readiness", show_lines=True)
+    status_table.add_column("Component", style="bold")
+    status_table.add_column("Status", justify="center")
+    status_table.add_column("Details")
+
+    # Java
+    j_badge = "[green]Ready[/green]" if status.java_installed else "[red]Missing (Java 17+ Required)[/red]"
+    status_table.add_row("Java JDK", j_badge, status.java_version or "Not found")
+
+    # Node
+    n_badge = "[green]Ready[/green]" if status.node_installed else "[red]Missing[/red]"
+    status_table.add_row("Node.js Runtime", n_badge, status.node_version or "Not found")
+
+    # REA
+    r_badge = "[green]Installed[/green]" if status.rea_installed else "[yellow]Not Installed[/yellow]"
+    status_table.add_row("REA CLI / MCP", r_badge, f"v{status.rea_version}" if status.rea_version else "Available via npm")
+
+    # Ghidra
+    g_badge = "[green]Ready[/green]" if status.ghidra_installed else "[yellow]Not Configured (Optional C Decompiler)[/yellow]"
+    status_table.add_row("Ghidra Engine", g_badge, str(status.ghidra_path) if status.ghidra_path else "Run 'gamecleaner setup --ghidra' to auto-download")
+
+    console.print(status_table)
+
+    # Auto-install REA if missing
+    if not status.rea_installed and status.npm_installed:
+        with console.status("[cyan]Installing REA CLI globally via npm..."):
+            ok, msg = manager.install_rea_globally()
+        if ok:
+            console.print(f"[green]✓[/green] {msg}")
+        else:
+            console.print(f"[red]✗[/red] {msg}")
+
+    # Auto-download Ghidra if requested
+    if args.ghidra:
+        if status.ghidra_installed:
+            console.print(f"[green]✓[/green] Ghidra is already installed at: {status.ghidra_path}")
+        else:
+            with console.status("[bold cyan]Downloading and extracting official portable Ghidra archive (this may take a few minutes)..."):
+                ok, msg, path = manager.install_ghidra_portable()
+            if ok:
+                console.print(f"[bold green]✓[/bold green] {msg}")
+            else:
+                console.print(f"[bold red]✗[/bold red] {msg}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="gamecleaner",
@@ -264,6 +321,10 @@ def main():
     ins_p = subparsers.add_parser("inspect", help="REA deep reverse-engineering and evidence dossier on a binary")
     ins_p.add_argument("binary_path", help="Path to executable or DLL to reverse-engineer")
 
+    # setup (Hands-free REA and Ghidra environment configuration)
+    setup_p = subparsers.add_parser("setup", help="Audit and configure hands-free REA and Ghidra environment")
+    setup_p.add_argument("--ghidra", action="store_true", help="Download and configure official portable Ghidra release")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -282,6 +343,8 @@ def main():
         handle_replace_emu(args)
     elif args.command == "inspect":
         handle_inspect(args)
+    elif args.command == "setup":
+        handle_setup(args)
 
 
 if __name__ == "__main__":
