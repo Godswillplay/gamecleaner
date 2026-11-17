@@ -1,6 +1,6 @@
 # GameCleaner 🛡️🎮
 
-[![GameCleaner CI](https://github.com/OWNER/gamecleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/gamecleaner/actions)
+[![GameCleaner CI](https://github.com/Godswillplay/gamecleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/Godswillplay/gamecleaner/actions)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)
 ![Tests](https://img.shields.io/badge/tests-29%2F29%20passing-brightgreen.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
