@@ -10,6 +10,7 @@ jobs:
   test:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12']
 
@@ -22,11 +23,27 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies
+      shell: cmd
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -e .
 
     - name: Run automated test suite
+      shell: cmd
       run: |
-        python -m unittest discover tests -v
+        python -m unittest discover tests -v 1> test_output.log 2>&1
+        set TEST_EXIT=%ERRORLEVEL%
+        type test_output.log
+        exit /b %TEST_EXIT%
+
+    - name: Add Test Output to Step Summary
+      if: always()
+      shell: powershell
+      run: |
+        if (Test-Path test_output.log) {
+          "### Test Output (Python ${{ matrix.python-version }})" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "```text" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content test_output.log | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+        }
