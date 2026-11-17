@@ -13,7 +13,9 @@ class TestPipelineE2E(unittest.TestCase):
 
     def setUp(self):
         self.game_dir = Path(tempfile.mkdtemp(prefix="mock_game_"))
-        self.explorer_path = Path(r"C:\Windows\explorer.exe")
+        self.explorer_path = Path(r"C:\Windows\System32\kernel32.dll")
+        if not self.explorer_path.exists():
+            self.explorer_path = Path(r"C:\Windows\explorer.exe")
 
         # 1. Create a clean game executable
         if self.explorer_path.exists():

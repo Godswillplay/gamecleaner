@@ -19,6 +19,8 @@ class TestREAModules(unittest.TestCase):
     def setUp(self):
         self.test_dir = Path(tempfile.mkdtemp(prefix="rea_test_"))
         self.explorer_path = Path(r"C:\Windows\explorer.exe")
+        if not self.explorer_path.exists():
+            self.explorer_path = Path(r"C:\Windows\System32\cmd.exe")
 
     def tearDown(self):
         if self.test_dir.exists():
@@ -79,7 +81,7 @@ class TestREAModules(unittest.TestCase):
         dossier = compiler.build_dossier(self.explorer_path)
         self.assertIn("REA Evidence Dossier", dossier)
         self.assertIn("Disassembled Entry Point", dossier)
-        self.assertIn("explorer.exe", dossier)
+        self.assertIn(self.explorer_path.name, dossier)
 
 
 if __name__ == "__main__":
