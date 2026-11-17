@@ -189,6 +189,16 @@ class EmulatorReplacer:
         goldberg_dir.mkdir(parents=True, exist_ok=True)
         (goldberg_dir / "steam_appid.txt").write_text(chosen_appid, encoding="utf-8")
 
+        # Step 5: Reverse-engineer required Steamworks interfaces for Goldberg
+        try:
+            from gamecleaner.rea.interface_extractor import InterfaceExtractor
+            extractor = InterfaceExtractor()
+            interfaces_file = target.full_path.parent / "steam_interfaces.txt"
+            extractor.generate_interfaces_file(target.full_path.parent, interfaces_file)
+            shutil.copy2(str(interfaces_file), str(goldberg_dir / "steam_interfaces.txt"))
+        except Exception:
+            pass
+
         return True, f"Successfully replaced {target.dll_name} with clean open-source emulator."
 
     def rollback_backup(self, backup_name: str) -> bool:

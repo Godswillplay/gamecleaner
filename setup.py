@@ -15,6 +15,7 @@ setup(
         "pefile>=2024.8.26",
         "rich>=13.0.0",
         "requests>=2.28.0",
+        "capstone>=5.0.0",
     ],
     python_requires=">=3.8",
 )

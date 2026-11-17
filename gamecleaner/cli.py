@@ -196,6 +196,36 @@ def handle_replace_emu(args):
             console.print(f"  [red]✗[/red] {t.dll_name} ({t.architecture}) -> {msg}")
 
 
+def handle_inspect(args):
+    target = Path(args.binary_path).resolve()
+    if not target.is_file():
+        console.print(f"[bold red]Error:[/bold red] File not found: {target}")
+        return
+
+    from gamecleaner.rea import EvidenceDossierCompiler
+    compiler = EvidenceDossierCompiler()
+    dossier = compiler.build_dossier(target)
+
+    # Determine safe output directory
+    out_dir = Path.cwd()
+    out_file = out_dir / f"REA_EVIDENCE_{target.name}.md"
+    try:
+        out_file.write_text(dossier, encoding="utf-8")
+    except Exception:
+        out_file = Path.cwd() / f"REA_EVIDENCE_{target.name}.md"
+        out_file.write_text(dossier, encoding="utf-8")
+
+    console.print(Panel(
+        f"[bold green]REA Reverse-Engineering Dossier Generated:[/bold green]\n"
+        f"Target: [cyan]{target.name}[/cyan]\n"
+        f"Saved to: [cyan]{out_file}[/cyan]\n\n"
+        "This dossier contains disassembled entrypoint instructions, cross-referenced strings,\n"
+        "and Steamworks interfaces for AI agent verification.",
+        title="REA Binary Reverse Engineering",
+    ))
+    console.print(dossier[:1500] + ("\n... [truncated for display, see full file]" if len(dossier) > 1500 else ""))
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="gamecleaner",
@@ -230,6 +260,10 @@ def main():
     emu_p.add_argument("path", help="Path to game directory")
     emu_p.add_argument("--custom-dll", help="Path to verified clean steam_api.dll or steam_api64.dll")
 
+    # inspect (REA Deep Reverse Engineering)
+    ins_p = subparsers.add_parser("inspect", help="REA deep reverse-engineering and evidence dossier on a binary")
+    ins_p.add_argument("binary_path", help="Path to executable or DLL to reverse-engineer")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -246,6 +280,8 @@ def main():
         handle_sandbox(args)
     elif args.command == "replace-emu":
         handle_replace_emu(args)
+    elif args.command == "inspect":
+        handle_inspect(args)
 
 
 if __name__ == "__main__":
