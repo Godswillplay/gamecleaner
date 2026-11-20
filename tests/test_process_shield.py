@@ -13,7 +13,7 @@ class TestProcessShield(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name)
+        self.game_dir = Path(self.temp_dir.name).resolve()
 
         # Setup mock game binaries
         (self.game_dir / "Game.exe").write_bytes(b"MZ" + b"\x00" * 100)

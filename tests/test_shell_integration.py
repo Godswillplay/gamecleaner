@@ -11,7 +11,7 @@ class TestShellIntegration(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.mgr = ShellIntegrationManager()
-        self.mgr.home_dir = Path(self.temp_dir.name)
+        self.mgr.home_dir = Path(self.temp_dir.name).resolve()
         self.mgr.bat_path = self.mgr.home_dir / "clean_game_context.bat"
 
     def tearDown(self):

@@ -12,7 +12,7 @@ class TestAIDecompilerClassifier(unittest.TestCase):
     def setUp(self):
         self.classifier = AIDecompilerClassifier()
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.sample_file = Path(self.temp_dir.name) / "test_hook.dll"
+        self.sample_file = Path(self.temp_dir.name).resolve() / "test_hook.dll"
         self.sample_file.write_bytes(b"MZ" + b"\x00" * 500)
 
     def tearDown(self):

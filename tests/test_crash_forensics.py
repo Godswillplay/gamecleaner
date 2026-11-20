@@ -17,7 +17,7 @@ class TestCrashForensics(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.work_dir = Path(self.temp_dir.name)
+        self.work_dir = Path(self.temp_dir.name).resolve()
         self.forensics = CrashForensics(game_dir=self.work_dir)
 
     def tearDown(self):

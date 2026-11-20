@@ -10,7 +10,7 @@ class TestRepackUnpacker(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.work_dir = Path(self.temp_dir.name)
+        self.work_dir = Path(self.temp_dir.name).resolve()
         self.out_dir = self.work_dir / "extracted_game"
         self.unpacker = RepackUnpacker(tools_dir=self.work_dir / "tools")
 

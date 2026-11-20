@@ -25,7 +25,7 @@ from gamecleaner.containment.firewall import FirewallManager
 class TestAdvancedResilience(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_adv_test_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_adv_test_")).resolve()
 
     def tearDown(self):
         if self.test_dir.exists():

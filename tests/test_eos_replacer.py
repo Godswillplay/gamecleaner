@@ -19,7 +19,7 @@ class TestEOSReplacer(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name)
+        self.game_dir = Path(self.temp_dir.name).resolve()
         self.replacer = EOSReplacer(self.game_dir)
 
     def tearDown(self):

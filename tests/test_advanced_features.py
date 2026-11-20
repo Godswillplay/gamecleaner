@@ -17,7 +17,7 @@ from gamecleaner.cleaner.dlc_fetcher import SteamDLCFetcher
 class TestAdvancedFeatures(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="adv_test_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="adv_test_")).resolve()
 
     def tearDown(self):
         if self.test_dir.exists():
@@ -130,7 +130,7 @@ class TestAdvancedFeatures(unittest.TestCase):
         self.assertTrue(entries[0].is_malicious)
 
     def test_persistence_auditor_startup_folder(self):
-        fake_appdata = self.test_dir / "AppData" / "Roaming"
+        fake_appdata = (self.test_dir / "AppData" / "Roaming").resolve()
         startup_dir = fake_appdata / r"Microsoft\Windows\Start Menu\Programs\Startup"
         startup_dir.mkdir(parents=True, exist_ok=True)
 

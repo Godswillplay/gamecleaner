@@ -17,7 +17,7 @@ class TestSteamlessUnpacker(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.work_dir = Path(self.temp_dir.name)
+        self.work_dir = Path(self.temp_dir.name).resolve()
         self.tools_dir = self.work_dir / "tools" / "steamless"
         self.tools_dir.mkdir(parents=True, exist_ok=True)
 

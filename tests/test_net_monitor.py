@@ -32,7 +32,7 @@ MockConn = namedtuple("MockConn", ["fd", "family", "type", "laddr", "raddr", "st
 class TestNetworkMonitor(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_test_netmon_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_test_netmon_")).resolve()
         self.monitor = NetworkMonitor(target="SniperElite.exe", target_dir=self.test_dir)
 
     def tearDown(self):
@@ -157,17 +157,15 @@ class TestNetworkMonitor(unittest.TestCase):
         self.assertEqual(loaded["target_name"], "SniperElite")
         self.assertEqual(len(loaded["records"]), 1)
 
-    @patch("gamecleaner.containment.net_monitor.psutil.process_iter")
-    @patch("gamecleaner.containment.net_monitor.psutil.net_connections")
-    def test_sample_connections_mocked(self, mock_net_conns, mock_proc_iter):
+    def test_sample_connections_mocked(self):
         """Samples simulated socket connections covering all four triage categories."""
-        # Setup mock process discovery
+        # Setup mock process discovery and network connections
         mock_proc = MagicMock()
         mock_proc.info = {"pid": 5555, "name": "SniperElite.exe"}
-        mock_proc_iter.return_value = [mock_proc]
 
-        # Setup mock network connections for PID 5555
-        mock_net_conns.return_value = [
+        mock_psutil = MagicMock()
+        mock_psutil.process_iter.return_value = [mock_proc]
+        mock_psutil.net_connections.return_value = [
             # 1. Safe Loopback
             MockConn(fd=1, family=socket.AF_INET, type=socket.SOCK_STREAM,
                      laddr=MockAddr("127.0.0.1", 50001), raddr=MockAddr("127.0.0.1", 27015),
@@ -186,8 +184,9 @@ class TestNetworkMonitor(unittest.TestCase):
                      status="ESTABLISHED", pid=5555),
         ]
 
-        records = self.monitor.sample_connections()
-        self.assertEqual(len(records), 4)
+        with patch("gamecleaner.containment.net_monitor.psutil", mock_psutil):
+            records = self.monitor.sample_connections()
+            self.assertEqual(len(records), 4)
 
         categories = [r.category for r in records]
         self.assertIn(CATEGORY_LOOPBACK, categories)

@@ -27,7 +27,7 @@ class TestNewCLICommands(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name)
+        self.game_dir = Path(self.temp_dir.name).resolve()
 
         # Populate a sample game structure
         (self.game_dir / "Game.exe").write_bytes(b"MZ" + b"\x00" * 100)

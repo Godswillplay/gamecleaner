@@ -24,7 +24,7 @@ class TestModCompatibilityAuditor(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name)
+        self.game_dir = Path(self.temp_dir.name).resolve()
         self.auditor = ModCompatibilityAuditor(self.game_dir)
 
     def tearDown(self):

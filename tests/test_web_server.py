@@ -71,7 +71,7 @@ class TestWebAPIUnit(unittest.TestCase):
     def setUp(self):
         self.api = WebAPI(host="127.0.0.1", port=8443)
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_path = Path(self.temp_dir.name)
+        self.game_path = Path(self.temp_dir.name).resolve()
 
         # Create dummy game binaries
         (self.game_path / "game.exe").write_bytes(b"MZ" + b"\x00" * 200)
@@ -168,7 +168,7 @@ class TestWebServerIntegration(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.test_game = Path(self.temp_dir.name)
+        self.test_game = Path(self.temp_dir.name).resolve()
         (self.test_game / "game.exe").write_bytes(b"MZ" + b"\x00" * 300)
         (self.test_game / "steam_api64.dll").write_bytes(b"MZ" + b"\x00" * 300)
         (self.test_game / "steam_appid.txt").write_text("480", encoding="utf-8")

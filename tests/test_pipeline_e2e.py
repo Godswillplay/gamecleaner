@@ -12,7 +12,7 @@ from gamecleaner.pipeline import GameCleanerPipeline
 class TestPipelineE2E(unittest.TestCase):
 
     def setUp(self):
-        self.game_dir = Path(tempfile.mkdtemp(prefix="mock_game_"))
+        self.game_dir = Path(tempfile.mkdtemp(prefix="mock_game_")).resolve()
         self.explorer_path = Path(r"C:\Windows\System32\kernel32.dll")
         if not self.explorer_path.exists():
             self.explorer_path = Path(r"C:\Windows\explorer.exe")

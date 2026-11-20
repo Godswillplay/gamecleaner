@@ -14,7 +14,7 @@ class TestIntegrityVerifier(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name)
+        self.game_dir = Path(self.temp_dir.name).resolve()
 
         # Create sample game files
         self.exe_file = self.game_dir / "Game.exe"

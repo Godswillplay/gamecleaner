@@ -17,7 +17,7 @@ from gamecleaner.rea import (
 class TestREAModules(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="rea_test_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="rea_test_")).resolve()
         self.explorer_path = Path(r"C:\Windows\explorer.exe")
         if not self.explorer_path.exists():
             self.explorer_path = Path(r"C:\Windows\System32\cmd.exe")

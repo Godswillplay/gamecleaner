@@ -863,7 +863,7 @@ fi
 
 if [ -d "${{SOURCE_SAVES}}" ]; then
     cp -r "${{SOURCE_SAVES}}/"* "${{STEAM_COMPAT_DIR}}/"
-    echo "[✓] Saves successfully copied to: ${{STEAM_COMPAT_DIR}}"
+    echo "[+] Saves successfully copied to: ${{STEAM_COMPAT_DIR}}"
 else
     echo "[!] Save directory not found in archive."
     exit 1

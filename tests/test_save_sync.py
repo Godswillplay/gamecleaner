@@ -22,7 +22,7 @@ class TestSaveSyncManager(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.work_dir = Path(self.temp_dir.name)
+        self.work_dir = Path(self.temp_dir.name).resolve()
 
         # Isolated AppData environment
         self.mock_appdata = self.work_dir / "AppData" / "Roaming"
@@ -57,7 +57,7 @@ class TestSaveSyncManager(unittest.TestCase):
         save_dir.mkdir(parents=True, exist_ok=True)
 
         resolved = self.sync_mgr.resolve_goldberg_save_path(appid)
-        self.assertEqual(resolved, save_dir)
+        self.assertEqual(resolved, save_dir.resolve())
 
     def test_resolve_goldberg_save_path_root_fallback(self):
         """Falls back to %APPDATA%/Goldberg SteamEmu Saves/ if root contains saves directly."""
@@ -65,7 +65,7 @@ class TestSaveSyncManager(unittest.TestCase):
         (self.goldberg_root / "global_save.dat").write_text("root save", encoding="utf-8")
 
         resolved = self.sync_mgr.resolve_goldberg_save_path(None)
-        self.assertEqual(resolved, self.goldberg_root)
+        self.assertEqual(resolved, self.goldberg_root.resolve())
 
     def test_create_snapshot_missing_appid(self):
         """Creating a snapshot without AppID returns failure."""
@@ -143,7 +143,7 @@ class TestSaveSyncManager(unittest.TestCase):
 
         # Create an orphan zip manually in .gamecleaner_saves
         saves_dir = self.mock_game_dir / ".gamecleaner_saves"
-        orphan_zip = saves_dir / "save_snapshot_55555_20261120_110000.zip"
+        orphan_zip = saves_dir / "save_snapshot_55555_20000101_000000.zip"
         with zipfile.ZipFile(orphan_zip, "w") as zf:
             zf.writestr("test.dat", "orphan test")
 

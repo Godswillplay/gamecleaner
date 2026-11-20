@@ -23,7 +23,7 @@ from gamecleaner.analyzer.virustotal import VirusTotalClient, VTAnalysisResult
 class TestAnalyzerAuditCycle3(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_audit3_test_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_audit3_test_")).resolve()
 
     def tearDown(self):
         if self.test_dir.exists():

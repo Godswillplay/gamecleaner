@@ -22,7 +22,7 @@ from gamecleaner.rea.setup_manager import REASetupManager
 class TestContainmentAndREAAudit(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_audit_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_audit_")).resolve()
 
     def tearDown(self):
         if self.test_dir.exists():

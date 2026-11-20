@@ -26,6 +26,30 @@ class PersistenceAuditor:
     def __init__(self, target_dir: Path):
         self.target_dir = Path(target_dir).resolve()
 
+    def _is_targeting_game(self, cmd_or_path: str) -> bool:
+        """Determines if a command line or path points inside the target game directory.
+        Handles both canonical long paths and 8.3 short path aliases."""
+        if not cmd_or_path or not isinstance(cmd_or_path, str):
+            return False
+        cmd_lower = cmd_or_path.lower()
+        target_lower = str(self.target_dir).lower()
+        if target_lower in cmd_lower:
+            return True
+        try:
+            clean = cmd_or_path.strip().strip('"').strip("'")
+            if '"' in cmd_or_path:
+                clean = cmd_or_path.split('"')[1]
+            elif " " in clean:
+                clean = clean.split()[0]
+            p = Path(clean)
+            if p.exists():
+                p_resolved = p.resolve()
+                if self.target_dir == p_resolved or self.target_dir in p_resolved.parents:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def audit_all(self) -> List[PersistenceEntry]:
         """Runs audit across Scheduled Tasks, Registry Run/RunOnce keys, Startup folder, and Services."""
         entries: List[PersistenceEntry] = []
@@ -69,7 +93,7 @@ class PersistenceAuditor:
                     task_name = list(row.values())[0] or "UnknownTask"
 
                 # Check if task runs something from game folder
-                if target_str in (task_to_run or "").lower():
+                if self._is_targeting_game(task_to_run):
                     entries.append(PersistenceEntry(
                         entry_type="ScheduledTask",
                         name=task_name,
@@ -98,11 +122,11 @@ class PersistenceAuditor:
                     num_values = winreg.QueryInfoKey(key)[1]
                     for i in range(num_values):
                         val_name, val_data, _ = winreg.EnumValue(key, i)
-                        if isinstance(val_data, str) and target_str in val_data.lower():
+                        if self._is_targeting_game(val_data):
                             entries.append(PersistenceEntry(
                                 entry_type="RegistryRun",
                                 name=val_name,
-                                target_command=val_data,
+                                target_command=str(val_data),
                                 is_malicious=True,
                                 details=f"Registry Run key '{val_name}' automatically executes on user login",
                             ))
@@ -127,11 +151,11 @@ class PersistenceAuditor:
                     num_values = winreg.QueryInfoKey(key)[1]
                     for i in range(num_values):
                         val_name, val_data, _ = winreg.EnumValue(key, i)
-                        if isinstance(val_data, str) and target_str in val_data.lower():
+                        if self._is_targeting_game(val_data):
                             entries.append(PersistenceEntry(
                                 entry_type="RegistryRunOnce",
                                 name=val_name,
-                                target_command=val_data,
+                                target_command=str(val_data),
                                 is_malicious=True,
                                 details=f"Registry RunOnce key '{val_name}' automatically executes on reboot/login",
                             ))
@@ -171,8 +195,8 @@ class PersistenceAuditor:
                             pass
                     elif entry.suffix.lower() in (".bat", ".cmd", ".vbs", ".ps1", ".url"):
                         try:
-                            text = entry.read_text(encoding="utf-8", errors="ignore").lower()
-                            if target_str in text:
+                            text = entry.read_text(encoding="utf-8", errors="ignore")
+                            if self._is_targeting_game(text):
                                 matched = True
                         except Exception:
                             pass
@@ -205,11 +229,11 @@ class PersistenceAuditor:
                         with winreg.OpenKey(s_key, svc_name, 0, winreg.KEY_READ) as svc_sub:
                             try:
                                 img_path, _ = winreg.QueryValueEx(svc_sub, "ImagePath")
-                                if isinstance(img_path, str) and target_str in img_path.lower():
+                                if self._is_targeting_game(img_path):
                                     entries.append(PersistenceEntry(
                                         entry_type="Service",
                                         name=svc_name,
-                                        target_command=img_path,
+                                        target_command=str(img_path),
                                         is_malicious=True,
                                         details=f"Windows Service '{svc_name}' launches binary from game folder",
                                     ))

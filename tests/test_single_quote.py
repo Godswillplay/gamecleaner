@@ -8,7 +8,7 @@ from gamecleaner.analyzer.pe_scanner import _verify_trust_win32, check_authentic
 
 class TestSingleQuoteHandling(unittest.TestCase):
     def test_single_quote_in_filename(self):
-        tmp = Path(tempfile.mkdtemp(prefix="gc_quote_"))
+        tmp = Path(tempfile.mkdtemp(prefix="gc_quote_")).resolve()
         sample = tmp / "Assassin's Creed.dll"
         src = Path(r"C:\Windows\System32\kernel32.dll")
         if not src.exists():

@@ -69,7 +69,7 @@ class TestCloudSaveMetadata(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_path = Path(self.temp_dir.name)
+        self.temp_path = Path(self.temp_dir.name).resolve()
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -130,7 +130,7 @@ class TestUniversalSaveExporter(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_path = Path(self.temp_dir.name)
+        self.temp_path = Path(self.temp_dir.name).resolve()
         self.appdata_mock = self.temp_path / "AppData" / "Roaming"
         self.sync = CloudSaveSync(appdata_dir=self.appdata_mock)
 
@@ -259,7 +259,7 @@ class TestSaveImporter(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_path = Path(self.temp_dir.name)
+        self.temp_path = Path(self.temp_dir.name).resolve()
         self.appdata_mock = self.temp_path / "AppData" / "Roaming"
         self.steam_userdata_mock = self.temp_path / "Steam" / "userdata"
         self.sync = CloudSaveSync(
@@ -364,7 +364,7 @@ class TestSaveDiscovery(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.temp_path = Path(self.temp_dir.name)
+        self.temp_path = Path(self.temp_dir.name).resolve()
         self.appdata_mock = self.temp_path / "AppData" / "Roaming"
         self.steam_userdata_mock = self.temp_path / "Steam" / "userdata"
         self.sync = CloudSaveSync(

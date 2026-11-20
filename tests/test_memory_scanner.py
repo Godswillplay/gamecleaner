@@ -110,7 +110,7 @@ class TestPathAndLocationChecks(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name) / "GameFolder"
+        self.game_dir = Path(self.temp_dir.name).resolve() / "GameFolder"
         self.game_dir.mkdir(parents=True, exist_ok=True)
         self.scanner = MemoryScanner(game_dir=self.game_dir)
 
@@ -126,7 +126,7 @@ class TestPathAndLocationChecks(unittest.TestCase):
 
     def test_is_inside_game_dir(self):
         game_dll = self.game_dir / "bin" / "game.dll"
-        outside_dll = Path(self.temp_dir.name) / "outside.dll"
+        outside_dll = Path(self.temp_dir.name).resolve() / "outside.dll"
         self.assertTrue(self.scanner.is_inside_game_dir(game_dll))
         self.assertFalse(self.scanner.is_inside_game_dir(outside_dll))
 
@@ -211,7 +211,7 @@ class TestSideloadedDLLVerification(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name) / "GameDir"
+        self.game_dir = Path(self.temp_dir.name).resolve() / "GameDir"
         self.game_dir.mkdir(parents=True, exist_ok=True)
         self.scanner = MemoryScanner(game_dir=self.game_dir)
 
@@ -279,7 +279,7 @@ class TestFullMemoryScanAndReporting(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.game_dir = Path(self.temp_dir.name) / "TargetGame"
+        self.game_dir = Path(self.temp_dir.name).resolve() / "TargetGame"
         self.game_dir.mkdir(parents=True, exist_ok=True)
         self.scanner = MemoryScanner(game_dir=self.game_dir)
 
@@ -389,7 +389,9 @@ class TestFullMemoryScanAndReporting(unittest.TestCase):
         mock_proc_2 = MagicMock()
         mock_proc_2.info = {"pid": 222, "name": "explorer.exe", "exe": r"C:\Windows\explorer.exe"}
 
-        with patch("gamecleaner.analyzer.memory_scanner.psutil.process_iter", return_value=[mock_proc_1, mock_proc_2]):
+        mock_psutil = MagicMock()
+        mock_psutil.process_iter.return_value = [mock_proc_1, mock_proc_2]
+        with patch("gamecleaner.analyzer.memory_scanner.psutil", mock_psutil):
             matches = self.scanner.find_game_processes("sniper")
             self.assertEqual(len(matches), 1)
             self.assertEqual(matches[0]["pid"], 111)

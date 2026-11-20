@@ -19,7 +19,7 @@ from gamecleaner.containment.proton_helper import (
 class TestProtonHelper(unittest.TestCase):
 
     def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_test_proton_"))
+        self.test_dir = Path(tempfile.mkdtemp(prefix="gc_test_proton_")).resolve()
         self.helper = ProtonHelper(self.test_dir)
 
     def tearDown(self):

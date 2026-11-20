@@ -49,7 +49,20 @@ from gamecleaner.containment import (
 from gamecleaner.pipeline import GameCleanerPipeline
 from gamecleaner.web import start_server
 
-console = Console()
+# Ensure UTF-8 output encoding on Windows consoles
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+console = Console(legacy_windows=False, safe_box=True)
 
 
 def handle_scan(args):
@@ -134,8 +147,8 @@ def handle_clean_all(args):
             with console.status(f"[bold cyan]Extracting archive and cleaning files into {out_dir.name}..."):
                 res = unpacker.unpack(target, out_dir, auto_clean=True)
             if res.success:
-                console.print(f"\n[bold green]✓ Unpack Succeeded![/bold green] Extracted [cyan]{res.extracted_files_count}[/cyan] files via [bold]{res.extractor_used}[/bold].")
-                console.print(f"[bold green]✓ Full Pipeline Applied:[/bold green] Binaries sanitized, clean emulators installed, and containment prepared.")
+                console.print(f"\n[bold green][+] Unpack Succeeded![/bold green] Extracted [cyan]{res.extracted_files_count}[/cyan] files via [bold]{res.extractor_used}[/bold].")
+                console.print(f"[bold green][+] Full Pipeline Applied:[/bold green] Binaries sanitized, clean emulators installed, and containment prepared.")
                 console.print(f"\n[cyan]Clean game is ready to play at:[/cyan]\n  • [bold]{out_dir}[/bold]")
             else:
                 console.print(f"\n[bold red]✗ Extraction Failed:[/bold red] {res.error_message}")
@@ -250,9 +263,9 @@ def handle_unpack(args):
         res = unpacker.unpack(installer, out, auto_clean=auto_clean)
 
     if res.success:
-        console.print(f"\n[bold green]✓ Extraction Succeeded![/bold green] Extracted [cyan]{res.extracted_files_count}[/cyan] files via [bold]{res.extractor_used}[/bold].")
+        console.print(f"\n[bold green][+] Extraction Succeeded![/bold green] Extracted [cyan]{res.extracted_files_count}[/cyan] files via [bold]{res.extractor_used}[/bold].")
         if res.cleaned_after_unpack:
-            console.print("[bold green]✓ Auto-Clean Completed:[/bold green] Binaries sanitized, clean emulators installed, and firewall scripts prepared.")
+            console.print("[bold green][+] Auto-Clean Completed:[/bold green] Binaries sanitized, clean emulators installed, and firewall scripts prepared.")
     else:
         console.print(f"\n[bold red]✗ Extraction Failed:[/bold red] {res.error_message}")
         sys.exit(1)
@@ -359,7 +372,7 @@ def handle_replace_emu(args):
     for t in targets:
         success, msg = er.replace_with_clean_emulator(t, custom_clean_dll=custom)
         if success:
-            console.print(f"  [green]✓[/green] {t.dll_name} ({t.architecture}) -> {msg}")
+            console.print(f"  [green][+][/green] {t.dll_name} ({t.architecture}) -> {msg}")
         else:
             console.print(f"  [red]✗[/red] {t.dll_name} ({t.architecture}) -> {msg}")
 
@@ -406,7 +419,7 @@ def handle_quarantine(args):
         with console.status(f"[bold cyan]Restoring {args.restore} from quarantine vault..."):
             ok = qm.restore_file(args.restore)
         if ok:
-            console.print(f"[bold green]✓ Successfully Restored:[/bold green] {args.restore} back to its original location.")
+            console.print(f"[bold green][+] Successfully Restored:[/bold green] {args.restore} back to its original location.")
         else:
             console.print(f"[bold red]✗ Restore Failed:[/bold red] '{args.restore}' not found in quarantine manifest or file missing.")
             sys.exit(1)
@@ -421,7 +434,7 @@ def handle_quarantine(args):
         restored = 0
         for item in items:
             if qm.restore_file(item.quarantined_filename):
-                console.print(f"  [green]✓ Restored:[/green] {item.original_rel_path} ({item.quarantined_filename})")
+                console.print(f"  [green][+] Restored:[/green] {item.original_rel_path} ({item.quarantined_filename})")
                 restored += 1
             else:
                 console.print(f"  [red]✗ Failed to restore:[/red] {item.quarantined_filename}")
@@ -437,7 +450,7 @@ def handle_quarantine(args):
         reason = getattr(args, "reason", "Manual quarantine isolation via CLI") or "Manual quarantine isolation via CLI"
         dest = qm.quarantine_file(file_to_q, reason=reason, sha256="")
         if dest:
-            console.print(f"[bold green]✓ File Quarantined:[/bold green] {file_to_q.name} -> {dest.name}")
+            console.print(f"[bold green][+] File Quarantined:[/bold green] {file_to_q.name} -> {dest.name}")
         else:
             console.print(f"[bold red]✗ Quarantine Failed:[/bold red] Could not isolate {file_to_q.name}")
             sys.exit(1)
@@ -490,7 +503,7 @@ def handle_rollback(args):
         with console.status(f"[bold cyan]Restoring backup {args.backup}..."):
             ok = er.rollback_backup(args.backup)
         if ok:
-            console.print(f"[bold green]✓ Successfully Restored:[/bold green] Backup '{args.backup}' rolled back to original path.")
+            console.print(f"[bold green][+] Successfully Restored:[/bold green] Backup '{args.backup}' rolled back to original path.")
         else:
             console.print(f"[bold red]✗ Rollback Failed:[/bold red] Backup '{args.backup}' not found in manifest or file missing.")
             sys.exit(1)
@@ -505,7 +518,7 @@ def handle_rollback(args):
         restored = 0
         for b_name, ok in results:
             if ok:
-                console.print(f"  [green]✓ Restored:[/green] {b_name}")
+                console.print(f"  [green][+] Restored:[/green] {b_name}")
                 restored += 1
             else:
                 console.print(f"  [red]✗ Failed to restore:[/red] {b_name}")
@@ -659,7 +672,7 @@ def handle_verify(args):
     if getattr(args, "create", False):
         with console.status("[bold cyan]Generating cryptographic SHA-256 integrity manifest..."):
             manifest_p = verifier.create_manifest()
-        console.print(f"[bold green]✓[/bold green] Cryptographic manifest generated: [bold]{manifest_p}[/bold]")
+        console.print(f"[bold green][+][/bold green] Cryptographic manifest generated: [bold]{manifest_p}[/bold]")
         return
 
     with console.status("[bold cyan]Verifying file integrity against manifest..."):
@@ -671,7 +684,7 @@ def handle_verify(args):
 
     if report.is_valid:
         console.print(Panel(
-            f"[bold green]✓ 100% Game Integrity Verified![/bold green]\n"
+            f"[bold green][+] 100% Game Integrity Verified![/bold green]\n"
             f"All {report.total_verified} binaries and configuration files match their cryptographic SHA-256 hashes.\n"
             f"No file corruption, tampering, or newly injected unknown binaries detected.",
             title=f"Integrity Check: {target.name}",
@@ -733,7 +746,7 @@ def handle_deps(args):
             try:
                 cmd = f'"{dr.file_path}" {dr.recommended_silent_args}'
                 subprocess.run(cmd, shell=True, timeout=120)
-                console.print(f"[green]✓[/green] Installed {dr.name}")
+                console.print(f"[green][+][/green] Installed {dr.name}")
             except Exception as e:
                 console.print(f"[red]✗[/red] Failed to install {dr.name}: {e}")
 
@@ -751,7 +764,7 @@ def handle_sideload(args):
         findings = auditor.audit()
 
     if not findings:
-        console.print(f"[bold green]✓[/bold green] No sideloaded system DLLs detected in {target.name}.")
+        console.print(f"[bold green][+][/bold green] No sideloaded system DLLs detected in {target.name}.")
         return
 
     table = Table(title=f"DLL Sideloading & Proxy Audit: {target.name}", show_lines=True)
@@ -825,17 +838,17 @@ def handle_run(args):
         er = EmulatorReplacer(game_dir)
         appid = er.discover_appid(game_dir) or "UnknownAppID"
         SaveSyncManager().create_snapshot(game_dir, appid=appid, note="Pre-launch automatic snapshot")
-        console.print("[dim]✓ Automated save snapshot captured.[/dim]")
+        console.print("[dim][+] Automated save snapshot captured.[/dim]")
     except Exception:
         pass
 
-    console.print(f"[green]✓[/green] Found game executable: [bold]{game_exe}[/bold]")
+    console.print(f"[green][+][/green] Found game executable: [bold]{game_exe}[/bold]")
     console.print(f"[cyan]Starting game in working directory:[/cyan] `{game_exe.parent}`")
 
     import subprocess
     try:
         subprocess.Popen([str(game_exe)], cwd=str(game_exe.parent))
-        console.print("[bold green]✓ Game process launched successfully![/bold green]")
+        console.print("[bold green][+] Game process launched successfully![/bold green]")
     except Exception as e:
         console.print(f"[bold red]Failed to launch game executable:[/bold red] {e}")
 
@@ -855,11 +868,11 @@ def handle_shield(args):
     if getattr(args, "apply", False):
         with console.status("[bold cyan]Applying Exploit Protection mitigations..."):
             results = shield.apply_mitigations()
-        console.print(f"[bold green]✓[/bold green] Applied mitigations to {len(results)} executables.")
+        console.print(f"[bold green][+][/bold green] Applied mitigations to {len(results)} executables.")
     elif getattr(args, "remove", False):
         with console.status("[bold cyan]Removing Exploit Protection mitigations..."):
             results = shield.remove_mitigations()
-        console.print(f"[bold green]✓[/bold green] Removed mitigations from {len(results)} executables.")
+        console.print(f"[bold green][+][/bold green] Removed mitigations from {len(results)} executables.")
 
     status_list = shield.audit()
     table = Table(title=f"Exploit Protection Status: {target.name}", show_lines=True)
@@ -893,7 +906,7 @@ def handle_drivers(args):
         findings = auditor.audit()
 
     if not findings:
-        console.print(f"[green]✓ Clean![/green] No kernel drivers or driver install scripts found in [bold]{target.name}[/bold].")
+        console.print(f"[green][+] Clean![/green] No kernel drivers or driver install scripts found in [bold]{target.name}[/bold].")
         return
 
     table = Table(title=f"Kernel Driver & BYOVD Audit: {target.name}", show_lines=True)
@@ -932,7 +945,7 @@ def handle_proton(args):
         res = helper.generate_all()
 
     console.print(Panel(
-        f"[bold green]✓ Steam Deck & Linux Proton Compatibility Prepared![/bold green]\n"
+        f"[bold green][+] Steam Deck & Linux Proton Compatibility Prepared![/bold green]\n"
         f"Executable: [bold]{res.executable_name}[/bold]\n"
         f"Wine DLL Overrides: [cyan]{res.overrides}[/cyan]\n"
         f"Network Air-Gap: {'[green]Supported (unshare/firejail)[/green]' if res.network_isolation_supported else '[yellow]Disabled[/yellow]'}\n\n"
@@ -993,7 +1006,7 @@ def handle_monitor(args):
     out_json = target if target.is_dir() else target.parent
     report_file = out_json / f"net_audit_{target.stem}.json"
     report.save_json(report_file)
-    console.print(f"\n[green]✓[/green] Network audit report saved to: [bold]{report_file}[/bold]")
+    console.print(f"\n[green][+][/green] Network audit report saved to: [bold]{report_file}[/bold]")
 
 
 def handle_steamless(args):
@@ -1016,7 +1029,7 @@ def handle_steamless(args):
         console.print(f"[cyan]Unpacking SteamStub DRM for {b.name}...[/cyan]")
         res = unpacker.unpack_binary(b, backup=True)
         if res.success:
-            console.print(f"[bold green]✓ Unpacked successfully![/bold green] Original backed up to: {res.backup_created}")
+            console.print(f"[bold green][+] Unpacked successfully![/bold green] Original backed up to: {res.backup_created}")
         else:
             console.print(f"[bold red]✗ Unpack failed or not SteamStub:[/bold red] {res.error_message}")
 
@@ -1038,7 +1051,7 @@ def handle_save_sync(args):
         with console.status(f"[bold cyan]Restoring save snapshot '{snapshot_file}'..."):
             ok = sync_mgr.restore_snapshot(target, snapshot_file, appid=appid)
         if ok:
-            console.print(f"[bold green]✓[/bold green] Save snapshot restored successfully!")
+            console.print(f"[bold green][+][/bold green] Save snapshot restored successfully!")
         else:
             console.print(f"[bold red]✗[/bold red] Failed to restore save snapshot.")
         return
@@ -1070,7 +1083,7 @@ def handle_save_sync(args):
         res = sync_mgr.create_snapshot(target, appid=appid, note=note)
 
     if res.success:
-        console.print(f"[bold green]✓ Save snapshot created:[/bold green] [bold]{res.snapshot_path}[/bold] ({res.files_archived} files)")
+        console.print(f"[bold green][+] Save snapshot created:[/bold green] [bold]{res.snapshot_path}[/bold] ({res.files_archived} files)")
     else:
         console.print(f"[yellow]Save snapshot notice:[/yellow] {res.error_message}")
 
@@ -1143,7 +1156,7 @@ def handle_anticheat(args):
         report = detector.scan()
 
     if not report.findings:
-        console.print(f"[green]✓ Clean![/green] No third-party Anti-Cheat solutions or binary packers detected in [bold]{target.name}[/bold].")
+        console.print(f"[green][+] Clean![/green] No third-party Anti-Cheat solutions or binary packers detected in [bold]{target.name}[/bold].")
         return
 
     table = Table(title=f"Anti-Cheat & Packer Audit: {target.name}", show_lines=True)
@@ -1254,7 +1267,7 @@ def handle_eos(args):
     if getattr(args, "clean", False):
         with console.status("[bold cyan]Sanitizing EOS configuration and emulator stubs..."):
             res = replacer.replace_all()
-        console.print(f"[bold green]✓[/bold green] Sanitized {len(res)} EOS libraries.")
+        console.print(f"[bold green][+][/bold green] Sanitized {len(res)} EOS libraries.")
 
 
 def handle_mem_audit(args):
@@ -1312,7 +1325,7 @@ def handle_cloud_save(args):
         with console.status("[bold cyan]Exporting portable save archive for Steam Deck & Ludusavi..."):
             res = sync.export_game(target, appid=app_id)
         if res.success:
-            console.print(f"[bold green]✓ Exported portable save package:[/bold green] [bold]{res.archive_path}[/bold] ({res.file_count} files)")
+            console.print(f"[bold green][+] Exported portable save package:[/bold green] [bold]{res.archive_path}[/bold] ({res.file_count} files)")
         else:
             console.print(f"[bold red]✗ Export failed:[/bold red] {res.error_message}")
     elif getattr(args, "import_steam", None):
@@ -1320,7 +1333,7 @@ def handle_cloud_save(args):
         with console.status("[bold cyan]Importing official Steam save data into Goldberg format..."):
             res = sync.import_steam_save(steam_user_dir, appid=app_id)
         if res.success:
-            console.print(f"[bold green]✓[/bold green] Imported {res.files_imported} saves to: {res.destination_path}")
+            console.print(f"[bold green][+][/bold green] Imported {res.files_imported} saves to: {res.destination_path}")
         else:
             console.print(f"[bold red]✗ Import failed:[/bold red] {res.error_message}")
     else:
@@ -1644,14 +1657,14 @@ def handle_setup(args):
     if getattr(args, "context_menu", False):
         ok, msg = shell_mgr.install()
         if ok:
-            console.print(f"[bold green]✓[/bold green] {msg}")
+            console.print(f"[bold green][+][/bold green] {msg}")
         else:
             console.print(f"[bold red]✗[/bold red] {msg}")
 
     if getattr(args, "remove_context_menu", False):
         ok, msg = shell_mgr.uninstall()
         if ok:
-            console.print(f"[bold green]✓[/bold green] {msg}")
+            console.print(f"[bold green][+][/bold green] {msg}")
         else:
             console.print(f"[bold red]✗[/bold red] {msg}")
 
@@ -1659,7 +1672,7 @@ def handle_setup(args):
         with console.status("[bold cyan]Ensuring innoextract portable binary is installed..."):
             bin_path = unpacker.ensure_innoextract()
         if bin_path:
-            console.print(f"[bold green]✓[/bold green] innoextract configured at: {bin_path}")
+            console.print(f"[bold green][+][/bold green] innoextract configured at: {bin_path}")
         else:
             console.print("[bold red]✗[/bold red] Failed to configure innoextract.")
 
@@ -1702,19 +1715,19 @@ def handle_setup(args):
         with console.status("[cyan]Installing REA CLI globally via npm..."):
             ok, msg = manager.install_rea_globally()
         if ok:
-            console.print(f"[green]✓[/green] {msg}")
+            console.print(f"[green][+][/green] {msg}")
         else:
             console.print(f"[red]✗[/red] {msg}")
 
     # Auto-download Ghidra if requested
     if getattr(args, "ghidra", False):
         if status.ghidra_installed:
-            console.print(f"[green]✓[/green] Ghidra is already installed at: {status.ghidra_path}")
+            console.print(f"[green][+][/green] Ghidra is already installed at: {status.ghidra_path}")
         else:
             with console.status("[bold cyan]Downloading and extracting official portable Ghidra archive (this may take a few minutes)..."):
                 ok, msg, path = manager.install_ghidra_portable()
             if ok:
-                console.print(f"[bold green]✓[/bold green] {msg}")
+                console.print(f"[bold green][+][/bold green] {msg}")
             else:
                 console.print(f"[bold red]✗[/bold red] {msg}")
 

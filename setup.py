@@ -24,6 +24,7 @@ setup(
         "rich>=13.0.0",
         "requests>=2.28.0",
         "capstone>=5.0.0",
+        "psutil>=5.9.0",
     ],
     classifiers=[
         "Development Status :: 5 - Production/Stable",
