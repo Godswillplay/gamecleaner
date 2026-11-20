@@ -45,7 +45,8 @@ class FirewallManager:
 
     def generate_scripts(self) -> Tuple[Path, Path]:
         """
-        Generates both block and unblock PowerShell (.ps1) scripts in the target directory.
+        Generates both block and unblock PowerShell (.ps1) scripts in the target directory,
+        as well as Fix_Firewall_And_Run.bat for automated unblock remediation and launching.
         These use fast array batching and can be executed as Administrator.
         """
         exes = self.find_executables()
@@ -58,6 +59,9 @@ class FirewallManager:
 
         block_content = f"""# GameCleaner High-Performance Outbound/Inbound Network Isolation Script
 # Run this script in PowerShell as Administrator
+param(
+    [switch]$NoPause
+)
 
 Write-Host "Applying GameCleaner Network Firewall Isolation..." -ForegroundColor Cyan
 
@@ -72,9 +76,10 @@ foreach ($exe in $exes) {{
     if (-not (Test-Path -LiteralPath $exe)) {{ continue }}
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($exe)
     $cleanName = ($exeName -replace '[^a-zA-Z0-9_]', '_')
-    if ($cleanName.Length -gt 40) {{ $cleanName = $cleanName.Substring(0, 40) }}
-    $ruleOut = "{self.rule_prefix}_" + $cleanName + "_Out"
-    $ruleIn = "{self.rule_prefix}_" + $cleanName + "_In"
+    if ($cleanName.Length -gt 30) {{ $cleanName = $cleanName.Substring(0, 30) }}
+    $pathHash = [Math]::Abs($exe.ToLowerInvariant().GetHashCode()).ToString("X")
+    $ruleOut = "{self.rule_prefix}_" + $cleanName + "_" + $pathHash + "_Out"
+    $ruleIn = "{self.rule_prefix}_" + $cleanName + "_" + $pathHash + "_In"
 
     try {{
         Remove-NetFirewallRule -DisplayName $ruleOut -ErrorAction SilentlyContinue
@@ -93,11 +98,21 @@ foreach ($exe in $exes) {{
 }}
 
 Write-Host "`nIsolation complete: $successCount blocked, $failCount failed." -ForegroundColor Cyan
-Pause
+
+if (-not $NoPause) {{
+    try {{
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {{
+            Pause
+        }}
+    }} catch {{}}
+}}
 """
 
         unblock_content = f"""# GameCleaner Network Firewall Rule Removal Script
 # Run this script in PowerShell as Administrator
+param(
+    [switch]$NoPause
+)
 
 Write-Host "Removing GameCleaner Network Firewall Rules..." -ForegroundColor Yellow
 
@@ -107,9 +122,11 @@ $exes = @(
 
 foreach ($exe in $exes) {{
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($exe)
-    $cleanName = $exeName -replace '[^a-zA-Z0-9_]', '_'
-    $ruleOut = "{self.rule_prefix}_" + $cleanName + "_Out"
-    $ruleIn = "{self.rule_prefix}_" + $cleanName + "_In"
+    $cleanName = ($exeName -replace '[^a-zA-Z0-9_]', '_')
+    if ($cleanName.Length -gt 30) {{ $cleanName = $cleanName.Substring(0, 30) }}
+    $pathHash = [Math]::Abs($exe.ToLowerInvariant().GetHashCode()).ToString("X")
+    $ruleOut = "{self.rule_prefix}_" + $cleanName + "_" + $pathHash + "_Out"
+    $ruleIn = "{self.rule_prefix}_" + $cleanName + "_" + $pathHash + "_In"
 
     Remove-NetFirewallRule -DisplayName $ruleOut -ErrorAction SilentlyContinue
     Remove-NetFirewallRule -DisplayName $ruleIn -ErrorAction SilentlyContinue
@@ -117,13 +134,136 @@ foreach ($exe in $exes) {{
 }}
 
 Write-Host "`nAll GameCleaner firewall rules removed." -ForegroundColor Green
-Pause
+
+if (-not $NoPause) {{
+    try {{
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {{
+            Pause
+        }}
+    }} catch {{}}
+}}
 """
 
         block_script_path.write_text(block_content, encoding="utf-8")
         unblock_script_path.write_text(unblock_content, encoding="utf-8")
 
+        # Automatically generate Fix_Firewall_And_Run.bat
+        self.generate_fix_and_run_script()
+
         return block_script_path, unblock_script_path
+
+    def generate_fix_and_run_script(self) -> Path:
+        """
+        Generates Fix_Firewall_And_Run.bat in the target directory.
+        Removes accidental Windows Firewall 'Cancel trap' inbound blocks,
+        verifies GameCleaner outbound isolation, and launches the game executable.
+        """
+        fix_bat_path = self.target_dir / "Fix_Firewall_And_Run.bat"
+        content = f"""@echo off
+setlocal enabledelayedexpansion
+title GameCleaner - Fix Firewall and Run
+
+echo ========================================================
+echo GameCleaner: Windows Firewall Remediation and Launcher
+echo ========================================================
+echo.
+
+:: 1. Check for Administrator privileges; self-elevate if needed
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [INFO] Administrator rights required to adjust Windows Firewall rules.
+    echo Requesting elevation...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd -ArgumentList '/c `\"%~f0`\"' -Verb RunAs"
+    exit /b
+)
+
+:: 2. Purge accidental Windows Inbound block rules (fixes Windows Firewall 'Cancel' trap)
+echo [1/3] Purging conflicting Windows Inbound block rules...
+set "GC_TARGET_DIR=%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {{
+    $scriptDir = $env:GC_TARGET_DIR.TrimEnd('\\')
+    $exes = Get-ChildItem -Path $scriptDir -Filter '*.exe' -Recurse | Where-Object {{
+        $_.FullName -notmatch '\\\\.gamecleaner' -and $_.FullName -notmatch '\\\\.quarantine'
+    }}
+    foreach ($exeItem in $exes) {{
+        $exe = $exeItem.FullName
+        Get-NetFirewallApplicationFilter -Program $exe -ErrorAction SilentlyContinue | ForEach-Object {{
+            $r = Get-NetFirewallRule -Name $_.AppId -ErrorAction SilentlyContinue
+            if ($r -and $r.Direction -eq 'Inbound' -and $r.Action -eq 'Block') {{
+                Remove-NetFirewallRule -Name $r.Name -ErrorAction SilentlyContinue
+                Write-Host \"  [CLEARED] Inbound block rule for: $($exeItem.Name)\" -ForegroundColor Yellow
+            }}
+        }}
+    }}
+}}"
+
+:: 3. Re-apply safe GameCleaner containment rules
+echo.
+echo [2/3] Verifying GameCleaner network containment...
+if exist "%~dp0block_game_network.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0block_game_network.ps1" -NoPause
+)
+
+:: 4. Locate and launch game executable from proper working directory
+echo.
+echo [3/3] Locating game executable...
+
+set "GAME_EXE="
+set "GAME_DIR="
+
+for %%d in ("%~dp0" "%~dp0bin\\" "%~dp0bin\\x64\\" "%~dp0bin\\x86\\" "%~dp0Binaries\\Win64\\" "%~dp0Binaries\\Win32\\" "%~dp0x64\\" "%~dp0x86\\") do (
+    if not defined GAME_EXE (
+        if exist "%%~d" (
+            for %%f in ("%%~d*.exe") do (
+                set "NAME=%%~nxf"
+                if /i not "!NAME!"=="unins000.exe" if /i not "!NAME!"=="unins001.exe" if /i not "!NAME!"=="UnityCrashHandler64.exe" if /i not "!NAME!"=="UnityCrashHandler32.exe" if /i not "!NAME!"=="CrashReportClient.exe" if /i not "!NAME!"=="DXSETUP.exe" if /i not "!NAME!"=="oalinst.exe" (
+                    set "GAME_EXE=%%~dpnxf"
+                    set "GAME_DIR=%%~dpf"
+                    goto :found_exe
+                )
+            )
+        )
+    )
+)
+
+if not defined GAME_EXE (
+    for /r "%~dp0" %%f in (*.exe) do (
+        set "FULL=%%~dpnxf"
+        set "NAME=%%~nxf"
+        echo !FULL! | findstr /i "\\.gamecleaner \\.quarantine" >nul
+        if errorlevel 1 (
+            if /i not "!NAME!"=="unins000.exe" if /i not "!NAME!"=="unins001.exe" if /i not "!NAME!"=="UnityCrashHandler64.exe" if /i not "!NAME!"=="UnityCrashHandler32.exe" if /i not "!NAME!"=="CrashReportClient.exe" if /i not "!NAME!"=="DXSETUP.exe" if /i not "!NAME!"=="oalinst.exe" (
+                set "GAME_EXE=%%~dpnxf"
+                set "GAME_DIR=%%~dpf"
+                goto :found_exe
+            )
+        )
+    )
+)
+
+:found_exe
+if not defined GAME_EXE (
+    echo [ERROR] No valid game executable found in "%~dp0".
+    pause
+    exit /b 1
+)
+
+echo.
+echo ========================================================
+echo Starting: !GAME_EXE!
+echo Working Dir: !GAME_DIR!
+echo ========================================================
+echo.
+cd /d "!GAME_DIR!"
+start "" "!GAME_EXE!"
+exit /b 0
+"""
+        fix_bat_path.write_text(content, encoding="utf-8")
+        return fix_bat_path
+
+    def generate_fix_firewall_batch(self) -> Path:
+        """Alias for generate_fix_and_run_script."""
+        return self.generate_fix_and_run_script()
 
     def apply_firewall_rules(self) -> List[FirewallRuleResult]:
         """
@@ -141,7 +281,7 @@ Pause
             block_ps1, _ = self.generate_scripts()
             try:
                 proc = subprocess.run(
-                    ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(block_ps1)],
+                    ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(block_ps1), "-NoPause"],
                     capture_output=True,
                     text=True,
                     timeout=30,

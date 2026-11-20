@@ -45,8 +45,12 @@ class BinaryDisassembler:
 
         try:
             pe = pefile.PE(str(binary_path), fast_load=True)
-            ep_rva = pe.OPTIONAL_HEADER.AddressOfEntryPoint
-            image_base = pe.OPTIONAL_HEADER.ImageBase
+            ep_rva = getattr(pe.OPTIONAL_HEADER, "AddressOfEntryPoint", 0)
+            image_base = getattr(pe.OPTIONAL_HEADER, "ImageBase", 0)
+
+            if not ep_rva or ep_rva == 0:
+                pe.close()
+                return None
 
             # Select architecture
             if pe.FILE_HEADER.Machine == 0x8664:
@@ -60,24 +64,27 @@ class BinaryDisassembler:
         except Exception:
             return None
 
-        md = capstone.Cs(capstone.CS_ARCH_X86, mode)
-        instructions: List[DisassembledInstruction] = []
+        try:
+            md = capstone.Cs(capstone.CS_ARCH_X86, mode)
+            instructions: List[DisassembledInstruction] = []
 
-        for i in md.disasm(ep_data, image_base + ep_rva):
-            instructions.append(DisassembledInstruction(
-                address=i.address,
-                mnemonic=i.mnemonic,
-                op_str=i.op_str,
-                bytes_hex=i.bytes.hex(),
-            ))
-            if len(instructions) >= max_instructions:
-                break
+            for i in md.disasm(ep_data, image_base + ep_rva):
+                instructions.append(DisassembledInstruction(
+                    address=i.address,
+                    mnemonic=i.mnemonic,
+                    op_str=i.op_str,
+                    bytes_hex=i.bytes.hex(),
+                ))
+                if len(instructions) >= max_instructions:
+                    break
 
-        return DisassemblyBlock(
-            function_name="EntryPoint",
-            rva=ep_rva,
-            instructions=instructions,
-        )
+            return DisassemblyBlock(
+                function_name="EntryPoint",
+                rva=ep_rva,
+                instructions=instructions,
+            )
+        except Exception:
+            return None
 
     def format_block_as_text(self, block: DisassemblyBlock) -> str:
         """Formats instructions as an annotated assembly listing for LLM reasoning."""

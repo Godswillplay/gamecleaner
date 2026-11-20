@@ -7,7 +7,7 @@ to classify whether a binary contains a benign DRM crack vs. hostile malware pay
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from gamecleaner.analyzer.pe_scanner import PEScanResult
 from gamecleaner.rea.disassembler import BinaryDisassembler
@@ -60,16 +60,17 @@ class AIDecompilerClassifier:
 
         # Extract suspicious APIs
         sensitive_apis = getattr(scan_result, "sensitive_imports_found", None)
-        if sensitive_apis is None:
+        if not sensitive_apis:
             sensitive_apis = []
             from gamecleaner.analyzer.threat_rules import SENSITIVE_APIS
             for dll_funcs in getattr(scan_result, "imports", {}).values():
                 for func in dll_funcs:
                     if func in SENSITIVE_APIS:
                         sensitive_apis.append(func)
+            scan_result.sensitive_imports_found = sensitive_apis
 
         # 3. Offline Heuristic Rule Assessment
-        verdict, confidence = self._evaluate_offline_heuristics(scan_result, critical_strings)
+        verdict, confidence = self._evaluate_offline_heuristics(scan_result, critical_strings, sensitive_apis=sensitive_apis)
 
         # 4. Format Prompt for LLM Agent
         prompt = self._format_agent_prompt(
@@ -99,14 +100,24 @@ class AIDecompilerClassifier:
         self,
         scan_result: PEScanResult,
         critical_strings: List[str],
-    ) -> (str, float):
+        sensitive_apis: Optional[List[str]] = None,
+    ) -> Tuple[str, float]:
         """Calculates an offline triage verdict based on REA evidence."""
-        imports = set(getattr(scan_result, "sensitive_imports_found", []))
+        if sensitive_apis is not None:
+            imports = set(sensitive_apis)
+        else:
+            imports = set(getattr(scan_result, "sensitive_imports_found", None) or [])
+            if not imports and hasattr(scan_result, "imports") and scan_result.imports:
+                from gamecleaner.analyzer.threat_rules import SENSITIVE_APIS
+                for dll_funcs in scan_result.imports.values():
+                    for func in dll_funcs:
+                        if func in SENSITIVE_APIS:
+                            imports.add(func)
         
         # Injection & Evasion combinations
         has_injection = any("WriteProcessMemory" in imp or "CreateRemoteThread" in imp or "VirtualAllocEx" in imp for imp in imports)
-        has_network = any("InternetOpen" in imp or "HttpSendRequest" in imp or "WSAStartup" in imp for imp in imports)
-        has_payload_strings = any("powershell" in s.lower() or "cmd.exe" in s.lower() or "http://" in s.lower() for s in critical_strings)
+        has_network = any("InternetOpen" in imp or "HttpSendRequest" in imp or "WSAStartup" in imp or "URLDownloadToFile" in imp for imp in imports)
+        has_payload_strings = any("powershell" in s.lower() or "cmd.exe" in s.lower() or "http://" in s.lower() or "https://" in s.lower() for s in critical_strings)
 
         if has_injection and has_payload_strings:
             return "MALICIOUS_PROCESS_INJECTION", 0.92
@@ -114,7 +125,10 @@ class AIDecompilerClassifier:
             return "MALICIOUS_DROPPER_OR_BEACON", 0.88
         elif any("VirtualProtect" in imp for imp in imports) and not has_network and not has_payload_strings:
             return "BENIGN_INLINE_DRM_HOOK", 0.78
-        elif (getattr(scan_result, "is_steam_wrapper", False) or not scan_result.is_signed) and not has_injection:
+        elif (
+            getattr(scan_result, "is_steam_wrapper", False)
+            or any(k in scan_result.file_name.lower() for k in ("steam_api", "eossdk", "uplay_r1", "uplay_r2"))
+        ) and not has_injection:
             return "PIRATED_DRM_EMULATOR_WRAPPER", 0.85
         else:
             return "SUSPICIOUS_UNKNOWN", 0.50

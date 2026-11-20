@@ -44,49 +44,73 @@ class EmulatorReplacer:
         Discovers the true Steam AppID from steam_appid.txt, steam_settings, or repack INI files
         (steam_emu.ini, codex.ini, flt.ini, Rune.ini, SteamConfig.ini, ALI213.ini, CreamAPI.ini).
         """
-        # 1. Direct steam_appid.txt
-        direct_file = dll_parent_dir / "steam_appid.txt"
-        if direct_file.exists():
-            try:
-                val = direct_file.read_text(encoding="utf-8", errors="ignore").strip()
-                if val.isdigit() and len(val) >= 3:
-                    return val
-            except Exception:
-                pass
-
-        # 2. steam_settings/steam_appid.txt
-        settings_file = dll_parent_dir / "steam_settings" / "steam_appid.txt"
-        if settings_file.exists():
-            try:
-                val = settings_file.read_text(encoding="utf-8", errors="ignore").strip()
-                if val.isdigit() and len(val) >= 3:
-                    return val
-            except Exception:
-                pass
-
-        # 3. Check INI files across dll_parent, parent, and root target_dir
-        pattern = re.compile(
-            r"^\s*(?:AppId|AppID|SteamAppId|TargetAppId)\s*=\s*([0-9]{3,10})",
-            re.IGNORECASE | re.MULTILINE,
-        )
         candidate_dirs = [dll_parent_dir, dll_parent_dir.parent, self.target_dir]
         seen_dirs = set()
 
+        # 1. Direct steam_appid.txt or steam_settings/steam_appid.txt across all candidate locations
         for cdir in candidate_dirs:
             cdir_res = cdir.resolve()
             if cdir_res in seen_dirs or not cdir_res.exists():
                 continue
             seen_dirs.add(cdir_res)
 
+            for probe_path in (cdir_res / "steam_appid.txt", cdir_res / "steam_settings" / "steam_appid.txt"):
+                if probe_path.exists():
+                    try:
+                        val = probe_path.read_text(encoding="utf-8", errors="ignore").strip().strip('"').strip("'")
+                        if val.isdigit() and len(val) >= 3 and val != "480" and val != "0":
+                            return val
+                    except Exception:
+                        pass
+
+        # 2. Check INI files across candidate directories (allowing quoted AppIDs)
+        pattern = re.compile(
+            r"""^\s*(?:AppId|AppID|SteamAppId|TargetAppId)\s*=\s*["']?([0-9]{3,10})["']?""",
+            re.IGNORECASE | re.MULTILINE,
+        )
+
+        for cdir_res in seen_dirs:
             for ini_path in cdir_res.glob("*.ini"):
                 try:
                     content = ini_path.read_text(encoding="utf-8", errors="ignore")
                     match = pattern.search(content)
                     if match:
-                        return match.group(1).strip()
+                        found_id = match.group(1).strip()
+                        if found_id != "0":
+                            return found_id
                 except Exception:
                     continue
+
+        # 3. Fallback check for any 480 placeholder if nothing else was found
+        for cdir_res in seen_dirs:
+            for probe_path in (cdir_res / "steam_appid.txt", cdir_res / "steam_settings" / "steam_appid.txt"):
+                if probe_path.exists():
+                    try:
+                        val = probe_path.read_text(encoding="utf-8", errors="ignore").strip().strip('"').strip("'")
+                        if val.isdigit() and len(val) >= 3:
+                            return val
+                    except Exception:
+                        pass
+
         return None
+
+    def _detect_pe_arch(self, path: Path) -> str:
+        """Reads PE header machine type directly for 100% accurate architecture identification."""
+        try:
+            with open(path, "rb") as f:
+                mz = f.read(2)
+                if mz == b"MZ":
+                    f.seek(0x3C)
+                    pe_offset = int.from_bytes(f.read(4), "little")
+                    f.seek(pe_offset + 4)
+                    machine = int.from_bytes(f.read(2), "little")
+                    if machine == 0x8664:
+                        return "x64"
+                    elif machine == 0x014C:
+                        return "x86"
+        except Exception:
+            pass
+        return "x64" if "64" in path.name.lower() else "x86"
 
     def find_drm_targets(self) -> List[DRMTarget]:
         """Scans the game directory for Steam, Epic, and Ubisoft DRM wrapper DLLs."""
@@ -96,7 +120,7 @@ class EmulatorReplacer:
                 continue
             name_lower = path.name.lower()
             if name_lower in ("steam_api.dll", "steam_api64.dll"):
-                arch = "x64" if "64" in name_lower else "x86"
+                arch = self._detect_pe_arch(path)
                 appid_val = self.discover_appid(path.parent)
 
                 targets.append(DRMTarget(
@@ -109,7 +133,7 @@ class EmulatorReplacer:
                     app_id=appid_val,
                 ))
             elif "eossdk" in name_lower and name_lower.endswith(".dll"):
-                arch = "x64" if "64" in name_lower else "x86"
+                arch = self._detect_pe_arch(path)
                 targets.append(DRMTarget(
                     dll_name=path.name,
                     architecture=arch,
@@ -118,8 +142,8 @@ class EmulatorReplacer:
                     relative_path=str(path.relative_to(self.target_dir)),
                     has_appid_file=False,
                 ))
-            elif "uplay_r1_loader" in name_lower and name_lower.endswith(".dll"):
-                arch = "x64" if "64" in name_lower else "x86"
+            elif any(tag in name_lower for tag in ("uplay_r1_loader", "uplay_r2_loader")) and name_lower.endswith(".dll"):
+                arch = self._detect_pe_arch(path)
                 targets.append(DRMTarget(
                     dll_name=path.name,
                     architecture=arch,
@@ -159,31 +183,45 @@ class EmulatorReplacer:
     def get_clean_emulator(self, architecture: str, platform: str = "Steam") -> Optional[Path]:
         """Retrieves or downloads the clean open-source emulator for Steam, Epic, or Ubisoft."""
         self.emulator_storage.mkdir(parents=True, exist_ok=True)
+        home_emu = Path.home() / ".gamecleaner" / "emulators"
         
         if platform == "Epic":
-            epic_storage = self.emulator_storage.parent / "epic"
-            epic_storage.mkdir(parents=True, exist_ok=True)
             filename = "EOSSDK-Win64-Shipping.dll" if architecture == "x64" else "EOSSDK-Win32-Shipping.dll"
-            local_file = epic_storage / filename
-            if local_file.exists() and local_file.stat().st_size > 1000:
-                return local_file
+            search_paths = [
+                self.emulator_storage / "epic" / filename,
+                self.emulator_storage.parent / "epic" / filename,
+                home_emu / "epic" / filename,
+                self.emulator_storage / filename,
+            ]
+            for p in search_paths:
+                if p.exists() and p.stat().st_size > 1000:
+                    return p
             return None
 
         if platform == "Ubisoft":
-            uplay_storage = self.emulator_storage.parent / "ubisoft"
-            uplay_storage.mkdir(parents=True, exist_ok=True)
             filename = "uplay_r1_loader64.dll" if architecture == "x64" else "uplay_r1_loader.dll"
-            local_file = uplay_storage / filename
-            if local_file.exists() and local_file.stat().st_size > 1000:
-                return local_file
+            search_paths = [
+                self.emulator_storage / "ubisoft" / filename,
+                self.emulator_storage.parent / "ubisoft" / filename,
+                home_emu / "ubisoft" / filename,
+                self.emulator_storage / filename,
+            ]
+            for p in search_paths:
+                if p.exists() and p.stat().st_size > 1000:
+                    return p
             return None
 
         # Steam (Goldberg)
         filename = "steam_api64.dll" if architecture == "x64" else "steam_api.dll"
-        local_file = self.emulator_storage / filename
-
-        if local_file.exists() and local_file.stat().st_size > 10000:
-            return local_file
+        steam_search_paths = [
+            self.emulator_storage / filename,
+            self.emulator_storage / "goldberg" / filename,
+            self.emulator_storage.parent / "goldberg" / filename,
+            home_emu / "goldberg" / filename,
+        ]
+        for p in steam_search_paths:
+            if p.exists() and p.stat().st_size > 10000:
+                return p
 
         # Attempt to download and extract Goldberg release archive if not present locally
         archive_url = self.GOLDBERG_URLS.get(architecture)
@@ -204,8 +242,9 @@ class EmulatorReplacer:
             except Exception:
                 pass
 
-        if local_file.exists() and local_file.stat().st_size > 10000:
-            return local_file
+        for p in steam_search_paths:
+            if p.exists() and p.stat().st_size > 10000:
+                return p
 
         return None
 
@@ -217,15 +256,18 @@ class EmulatorReplacer:
     ) -> Tuple[bool, str]:
         """
         Replaces the untrusted DLL with a verified clean emulator.
-        Also configures steam_appid.txt and DLCs for Steam targets.
+        Also configures steam_appid.txt, interfaces, and DLCs for Steam targets across all executable locations.
         """
-        # Step 1: Backup
-        self.backup_dll(target)
+        import time
 
-        # Step 2: Get clean DLL
-        clean_dll = custom_clean_dll or self.get_clean_emulator(target.architecture, platform=target.platform)
+        # Step 1: Validate clean emulator exists BEFORE creating backups
+        clean_dll = Path(custom_clean_dll) if custom_clean_dll else self.get_clean_emulator(target.architecture, platform=target.platform)
         if not clean_dll or not clean_dll.exists():
             return False, f"Clean emulator binary for {target.platform} ({target.architecture}) not found"
+
+        # Step 2: Backup once clean replacement binary is confirmed
+        if target.full_path.exists():
+            self.backup_dll(target)
 
         # Step 3: Replace file (using rename-first evasion if file is locked or loaded in memory)
         try:
@@ -240,24 +282,53 @@ class EmulatorReplacer:
         except (PermissionError, OSError):
             # NTFS loaded DLL evasion: rename existing locked file out of the way first
             try:
-                temp_old = target.full_path.with_name(f"{target.full_path.name}.gc_old")
+                temp_old = target.full_path.with_name(f"{target.full_path.name}.{int(time.time()*1000)}.gc_old")
                 if temp_old.exists():
-                    temp_old.unlink()
+                    try:
+                        temp_old.unlink()
+                    except Exception:
+                        pass
                 os.replace(target.full_path, temp_old)
                 shutil.copy2(str(clean_dll), str(target.full_path))
             except Exception as e:
                 return False, f"Failed to overwrite {target.full_path.name} (locked by process): {e}"
 
+        def _safe_write(p: Path, text: str):
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                if p.exists():
+                    try:
+                        import stat
+                        os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+                    except Exception:
+                        pass
+                p.write_text(text, encoding="utf-8")
+            except Exception:
+                pass
+
+        def _safe_copy(src_p: Path, dst_p: Path):
+            try:
+                dst_p.parent.mkdir(parents=True, exist_ok=True)
+                if dst_p.exists():
+                    try:
+                        import stat
+                        os.chmod(dst_p, stat.S_IWRITE | stat.S_IREAD)
+                    except Exception:
+                        pass
+                shutil.copy2(str(src_p), str(dst_p))
+            except Exception:
+                pass
+
         # Step 4-6: Configure Steam-specific settings (AppID, interfaces, DLC manifests)
         if target.platform == "Steam":
             chosen_appid = target.app_id or self.discover_appid(target.full_path.parent) or default_appid
             appid_file = target.full_path.parent / "steam_appid.txt"
-            appid_file.write_text(chosen_appid, encoding="utf-8")
+            _safe_write(appid_file, chosen_appid)
 
             # Also create steam_settings/steam_appid.txt for Goldberg emulator compatibility
             goldberg_dir = target.full_path.parent / "steam_settings"
             goldberg_dir.mkdir(parents=True, exist_ok=True)
-            (goldberg_dir / "steam_appid.txt").write_text(chosen_appid, encoding="utf-8")
+            _safe_write(goldberg_dir / "steam_appid.txt", chosen_appid)
 
             # Step 5: Reverse-engineer required Steamworks interfaces for Goldberg
             try:
@@ -265,7 +336,8 @@ class EmulatorReplacer:
                 extractor = InterfaceExtractor()
                 interfaces_file = target.full_path.parent / "steam_interfaces.txt"
                 extractor.generate_interfaces_file(target.full_path.parent, interfaces_file)
-                shutil.copy2(str(interfaces_file), str(goldberg_dir / "steam_interfaces.txt"))
+                if interfaces_file.exists():
+                    shutil.copy2(str(interfaces_file), str(goldberg_dir / "steam_interfaces.txt"))
             except Exception:
                 pass
 
@@ -279,28 +351,115 @@ class EmulatorReplacer:
             except Exception:
                 pass
 
-            # Step 7: Mirror clean emulator and configs to common executable subdirectories (bin/, bin/x64/, etc.)
-            common_bin_candidates = [
-                target.full_path.parent / "bin",
-                target.full_path.parent / "bin" / "x64",
-                target.full_path.parent / "bin" / "x86",
-                target.full_path.parent / "Binaries" / "Win64",
-                target.full_path.parent / "Engine" / "Binaries" / "Win64",
-            ]
-            for bdir in common_bin_candidates:
-                if bdir.exists() and bdir.is_dir():
-                    try:
+            # Step 7: Mirror clean emulator, DLC.txt, steam_interfaces.txt, and configs to candidate executable directories
+            candidate_dirs = set()
+            # If target DLL was already located in bin/ or bin/x64/, include game root target_dir
+            if target.full_path.parent != self.target_dir:
+                candidate_dirs.add(self.target_dir)
+
+            # Common binary subdirectories relative to self.target_dir
+            for sub in [
+                "bin",
+                "bin/x64",
+                "bin/x86",
+                "bin/Win64",
+                "bin/Win32",
+                "Binaries/Win64",
+                "Binaries/Win32",
+                "Engine/Binaries/Win64",
+                "Engine/Binaries/Win32",
+            ]:
+                cand = (self.target_dir / sub).resolve()
+                if cand.exists() and cand.is_dir() and cand != target.full_path.parent:
+                    candidate_dirs.add(cand)
+
+            # Also check subdirectories relative to target.full_path.parent
+            for sub in ["bin", "bin/x64", "bin/x86", "Binaries/Win64"]:
+                cand = (target.full_path.parent / sub).resolve()
+                if cand.exists() and cand.is_dir() and cand != target.full_path.parent:
+                    candidate_dirs.add(cand)
+
+            # Also include any directories containing .exe files under target_dir
+            for exe_path in self.target_dir.rglob("*.exe"):
+                if ".gamecleaner" in str(exe_path):
+                    continue
+                exe_dir = exe_path.parent.resolve()
+                if exe_dir != target.full_path.parent and exe_dir.exists() and exe_dir.is_dir():
+                    candidate_dirs.add(exe_dir)
+
+            # Mirror to all discovered candidate directories
+            for bdir in candidate_dirs:
+                try:
+                    _safe_copy(clean_dll, bdir / target.dll_name)
+                    _safe_write(bdir / "steam_appid.txt", chosen_appid)
+                    b_gold = bdir / "steam_settings"
+                    b_gold.mkdir(parents=True, exist_ok=True)
+                    _safe_write(b_gold / "steam_appid.txt", chosen_appid)
+
+                    # Mirror DLC.txt to steam_settings/DLC.txt and root
+                    src_dlc = goldberg_dir / "DLC.txt"
+                    if src_dlc.exists():
+                        _safe_copy(src_dlc, b_gold / "DLC.txt")
+                        _safe_copy(src_dlc, bdir / "DLC.txt")
+
+                    # Mirror steam_interfaces.txt to steam_settings and root
+                    src_iface = goldberg_dir / "steam_interfaces.txt"
+                    if not src_iface.exists() and (target.full_path.parent / "steam_interfaces.txt").exists():
+                        src_iface = target.full_path.parent / "steam_interfaces.txt"
+                    if src_iface.exists():
+                        _safe_copy(src_iface, b_gold / "steam_interfaces.txt")
+                        _safe_copy(src_iface, bdir / "steam_interfaces.txt")
+
+                    # Mirror persona / identity configs if present
+                    for id_file in ("account_name.txt", "user_steam_id.txt", "listen_port.txt"):
+                        if (goldberg_dir / id_file).exists():
+                            _safe_copy(goldberg_dir / id_file, b_gold / id_file)
+                except Exception:
+                    pass
+        elif target.platform in ("Epic", "Ubisoft"):
+            # Mirror clean Epic/Ubisoft DLL to any candidate bin directories
+            candidate_dirs = set()
+            if target.full_path.parent != self.target_dir:
+                candidate_dirs.add(self.target_dir)
+            for sub in ["bin", "bin/x64", "Binaries/Win64", "Engine/Binaries/Win64"]:
+                cand = (self.target_dir / sub).resolve()
+                if cand.exists() and cand.is_dir() and cand != target.full_path.parent:
+                    candidate_dirs.add(cand)
+
+            for bdir in candidate_dirs:
+                try:
+                    if (bdir / target.dll_name).exists() or any(bdir.glob("*.exe")):
                         shutil.copy2(str(clean_dll), str(bdir / target.dll_name))
-                        (bdir / "steam_appid.txt").write_text(chosen_appid, encoding="utf-8")
-                        b_gold = bdir / "steam_settings"
-                        b_gold.mkdir(parents=True, exist_ok=True)
-                        (b_gold / "steam_appid.txt").write_text(chosen_appid, encoding="utf-8")
-                        if (target.full_path.parent / "steam_interfaces.txt").exists():
-                            shutil.copy2(str(target.full_path.parent / "steam_interfaces.txt"), str(bdir / "steam_interfaces.txt"))
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
         return True, f"Successfully replaced {target.dll_name} with clean open-source emulator."
+
+    def list_backups(self) -> List[dict]:
+        """Returns list of all available emulator backups in .gamecleaner_backup."""
+        manifest_file = self.backup_dir / "backup_manifest.json"
+        if not manifest_file.exists():
+            return []
+        try:
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            backups = []
+            for b_name, data in manifest.items():
+                data_copy = dict(data)
+                data_copy["backup_file"] = b_name
+                backups.append(data_copy)
+            return backups
+        except Exception:
+            return []
+
+    def rollback_all(self) -> List[Tuple[str, bool]]:
+        """Restores all backed up DLLs."""
+        backups = self.list_backups()
+        results = []
+        for b in backups:
+            name = b["backup_file"]
+            ok = self.rollback_backup(name)
+            results.append((name, ok))
+        return results
 
     def rollback_backup(self, backup_name: str) -> bool:
         """Restores a backed up DLL."""
@@ -308,7 +467,11 @@ class EmulatorReplacer:
         if not manifest_file.exists():
             return False
 
-        manifest = json.loads(manifest_file.read_text())
+        try:
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+
         if backup_name not in manifest:
             return False
 
@@ -317,6 +480,19 @@ class EmulatorReplacer:
         dest_file = Path(info["original_path"])
 
         if src_file.exists():
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            if dest_file.exists():
+                try:
+                    import stat
+                    os.chmod(dest_file, stat.S_IWRITE | stat.S_IREAD)
+                except Exception:
+                    pass
             shutil.copy2(str(src_file), str(dest_file))
+            try:
+                src_file.unlink()
+                del manifest[backup_name]
+                manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            except Exception:
+                pass
             return True
         return False

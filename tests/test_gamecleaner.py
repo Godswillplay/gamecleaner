@@ -73,6 +73,26 @@ class TestGameCleaner(unittest.TestCase):
         self.assertTrue(dummy_file.exists())
         self.assertEqual(len(qm.list_quarantined()), 0)
 
+        # Test quarantine and restore on nested subdirectory file
+        sub_dir = self.test_dir / "bin" / "x64"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        nested_file = sub_dir / "shady_helper.dll"
+        nested_file.write_text("nested payload")
+
+        dest_nested = qm.quarantine_file(nested_file, reason="Nested Miner", sha256="nested_sha256")
+        self.assertIsNotNone(dest_nested)
+        self.assertFalse(nested_file.exists())
+
+        items = qm.list_quarantined()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].original_rel_path, str(Path("bin/x64/shady_helper.dll")))
+
+        # Test restoring using Path object
+        restored = qm.restore_file(dest_nested)
+        self.assertTrue(restored)
+        self.assertTrue(nested_file.exists())
+        self.assertEqual(len(qm.list_quarantined()), 0)
+
     def test_firewall_manager(self):
         fm = FirewallManager(self.test_dir)
         dummy_exe = self.test_dir / "game.exe"
@@ -81,6 +101,13 @@ class TestGameCleaner(unittest.TestCase):
         block_ps1, unblock_ps1 = fm.generate_scripts()
         self.assertTrue(block_ps1.exists())
         self.assertTrue(unblock_ps1.exists())
+        self.assertTrue((self.test_dir / "Fix_Firewall_And_Run.bat").exists())
+
+        fix_bat = fm.generate_fix_firewall_batch()
+        self.assertTrue(fix_bat.exists())
+        fix_content = fix_bat.read_text(encoding="utf-8")
+        self.assertIn("Remove-NetFirewallRule", fix_content)
+        self.assertIn("*.exe", fix_content)
 
         content = block_ps1.read_text(encoding="utf-8")
         self.assertIn("New-NetFirewallRule", content)
@@ -98,6 +125,12 @@ class TestGameCleaner(unittest.TestCase):
         self.assertIn("<VGpu>Enable</VGpu>", xml_content)
         self.assertIn("<ReadOnly>true</ReadOnly>", xml_content)
         self.assertIn(str(self.test_dir.resolve()), xml_content)
+
+        # Test generate_batch_runner alias and is_supported property
+        bat_runner = sg.generate_batch_runner()
+        self.assertTrue(bat_runner.exists())
+        self.assertEqual(bat_runner.name, "Launch_Game_Isolated.bat")
+        self.assertIsInstance(sg.is_supported, bool)
 
     def test_emulator_replacer_detection(self):
         er = EmulatorReplacer(self.test_dir)

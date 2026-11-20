@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from typing import Callable, Dict, Optional, Tuple
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -34,7 +35,15 @@ class REASetupManager:
         if tools_dir:
             self.tools_dir = Path(tools_dir).resolve()
         else:
-            self.tools_dir = Path(__file__).resolve().parent.parent.parent / "tools"
+            repo_tools = Path(__file__).resolve().parent.parent.parent / "tools"
+            try:
+                # If running from local source checkout and writable, use local tools dir
+                if repo_tools.exists() or os.access(repo_tools.parent, os.W_OK):
+                    self.tools_dir = repo_tools
+                else:
+                    self.tools_dir = Path.home() / ".gamecleaner" / "tools"
+            except Exception:
+                self.tools_dir = Path.home() / ".gamecleaner" / "tools"
         self.ghidra_dir = self.tools_dir / "ghidra"
 
     def check_environment(self) -> EnvironmentStatus:
@@ -42,46 +51,108 @@ class REASetupManager:
         # 1. Java check
         java_ok = False
         java_ver = None
-        try:
-            p = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=5)
-            output = p.stderr or p.stdout
-            if "version" in output:
-                java_ok = True
-                java_ver = output.splitlines()[0].strip()
-        except Exception:
-            pass
+
+        java_binaries = ["java"]
+        # Fallback candidate search on Windows
+        if os.name == "nt":
+            for env_var in ["JAVA_HOME", "JDK_HOME"]:
+                val = os.environ.get(env_var)
+                if val:
+                    candidate = Path(val) / "bin" / "java.exe"
+                    if candidate.exists():
+                        java_binaries.append(str(candidate))
+
+            # Common install locations
+            for root_dir in [r"C:\Program Files\Java", r"C:\Program Files\Eclipse Adoptium", r"C:\Program Files\Microsoft"]:
+                p = Path(root_dir)
+                if p.exists():
+                    for j_exe in p.glob("**/bin/java.exe"):
+                        java_binaries.append(str(j_exe))
+
+        for j_cmd in java_binaries:
+            try:
+                p = subprocess.run([j_cmd, "-version"], capture_output=True, text=True, timeout=5)
+                output = p.stderr or p.stdout
+                if "version" in output:
+                    java_ok = True
+                    java_ver = output.splitlines()[0].strip()
+                    # If found via non-standard path, propagate to PATH
+                    if j_cmd != "java":
+                        j_bin = str(Path(j_cmd).parent)
+                        if j_bin not in os.environ.get("PATH", ""):
+                            os.environ["PATH"] = f"{j_bin};{os.environ.get('PATH', '')}"
+                        if "JAVA_HOME" not in os.environ:
+                            os.environ["JAVA_HOME"] = str(Path(j_cmd).parent.parent)
+                    break
+            except Exception:
+                continue
 
         # 2. Node check
         node_ok = False
         node_ver = None
-        try:
-            p = subprocess.run(["node", "-v"], capture_output=True, text=True, timeout=5)
-            if p.returncode == 0:
-                node_ok = True
-                node_ver = p.stdout.strip()
-        except Exception:
-            pass
+        node_binaries = ["node"]
+        if os.name == "nt":
+            for n_path in [r"C:\Program Files\nodejs\node.exe", r"C:\Program Files (x86)\nodejs\node.exe"]:
+                if Path(n_path).exists():
+                    node_binaries.append(n_path)
+
+        for n_cmd in node_binaries:
+            try:
+                p = subprocess.run([n_cmd, "-v"], capture_output=True, text=True, timeout=5)
+                if p.returncode == 0:
+                    node_ok = True
+                    node_ver = p.stdout.strip()
+                    if n_cmd != "node":
+                        n_dir = str(Path(n_cmd).parent)
+                        if n_dir not in os.environ.get("PATH", ""):
+                            os.environ["PATH"] = f"{n_dir};{os.environ.get('PATH', '')}"
+                    break
+            except Exception:
+                continue
 
         # 3. npm check
-        npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
         npm_ok = False
-        try:
-            p = subprocess.run([npm_cmd, "-v"], capture_output=True, text=True, timeout=5)
-            if p.returncode == 0:
-                npm_ok = True
-        except Exception:
-            pass
+        npm_binaries = ["npm.cmd" if os.name == "nt" else "npm"]
+        if os.name == "nt":
+            for n_path in [r"C:\Program Files\nodejs\npm.cmd"]:
+                if Path(n_path).exists():
+                    npm_binaries.append(n_path)
+
+        for npm_cmd in npm_binaries:
+            try:
+                p = subprocess.run([npm_cmd, "-v"], capture_output=True, text=True, timeout=5)
+                if p.returncode == 0:
+                    npm_ok = True
+                    break
+            except Exception:
+                continue
 
         # 4. REA check
         rea_ok = False
         rea_ver = None
-        for cmd in ["rea", "rea-agents"]:
-            cmd_name = f"{cmd}.cmd" if os.name == "nt" else cmd
+        rea_commands = ["rea", "rea-agents"]
+        rea_binaries = []
+        for cmd in rea_commands:
+            rea_binaries.append(f"{cmd}.cmd" if os.name == "nt" else cmd)
+
+        if os.name == "nt":
+            appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+            npm_global = Path(appdata) / "npm"
+            for cmd in rea_commands:
+                cand = npm_global / f"{cmd}.cmd"
+                if cand.exists():
+                    rea_binaries.append(str(cand))
+
+        for cmd_name in rea_binaries:
             try:
                 p = subprocess.run([cmd_name, "--version"], capture_output=True, text=True, timeout=5)
                 if p.returncode == 0 and p.stdout.strip():
                     rea_ok = True
                     rea_ver = p.stdout.strip()
+                    # Propagate directory to PATH if needed
+                    cmd_dir = str(Path(cmd_name).parent)
+                    if os.path.isabs(cmd_name) and cmd_dir not in os.environ.get("PATH", ""):
+                        os.environ["PATH"] = f"{cmd_dir};{os.environ.get('PATH', '')}"
                     break
             except Exception:
                 continue
@@ -115,10 +186,12 @@ class REASetupManager:
         if self.ghidra_dir.exists():
             if self._is_valid_ghidra_dir(self.ghidra_dir):
                 return self.ghidra_dir
-            # Search one level subfolder (e.g. ghidra_12.2_PUBLIC)
-            for sub in self.ghidra_dir.iterdir():
-                if sub.is_dir() and self._is_valid_ghidra_dir(sub):
-                    return sub
+            # Search subfolders recursively for analyzeHeadless
+            pattern = "**/support/analyzeHeadless.bat" if os.name == "nt" else "**/support/analyzeHeadless"
+            for headless in self.ghidra_dir.glob(pattern):
+                candidate = headless.parent.parent
+                if self._is_valid_ghidra_dir(candidate):
+                    return candidate
 
         # Check PATH
         which_headless = shutil.which("analyzeHeadless.bat") or shutil.which("analyzeHeadless")
@@ -169,6 +242,10 @@ class REASetupManager:
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                return False, "GitHub API rate limit exceeded (HTTP 403). Set GHIDRA_INSTALL_DIR to use existing Ghidra.", None
+            return False, f"GitHub API error (HTTP {e.code}): {e}", None
         except Exception as e:
             return False, f"Could not query GitHub releases for Ghidra: {e}", None
 

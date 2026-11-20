@@ -67,12 +67,46 @@ class RepackUnpacker:
 
         return None
 
+    def ensure_7z(self) -> Optional[Path]:
+        """Ensures 7-Zip (7z or 7za) is available from PATH, standard Program Files, or tools dir."""
+        for name in ("7z", "7za", "7z.exe", "7za.exe"):
+            found = shutil.which(name)
+            if found:
+                return Path(found)
+
+        # Common Windows installation locations
+        std_candidates = [
+            Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "7-Zip" / "7z.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "7-Zip" / "7z.exe",
+            self.tools_dir / "7z.exe",
+            self.tools_dir / "7za.exe",
+        ]
+        for cand in std_candidates:
+            if cand.exists() and cand.is_file():
+                return cand
+
+        return None
+
     def is_inno_setup(self, file_path: Path) -> bool:
         """Heuristic check to determine if an executable is an Inno Setup installer."""
         try:
             with open(file_path, "rb") as f:
                 header = f.read(204800)  # Read first 200KB
                 return b"Inno Setup" in header or b"Inno Setup Setup Data" in header
+        except Exception:
+            return False
+
+    def is_nsis_installer(self, file_path: Path) -> bool:
+        """Heuristic check to determine if an executable is a Nullsoft Scriptable Install System (NSIS) installer."""
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(524288)  # Read first 512KB
+                return (
+                    b"NullsoftInst" in header
+                    or b"Nullsoft.NSIS" in header
+                    or b"NullSoft" in header
+                    or b"\xef\xbe\xad\xdeNullsoftInst" in header
+                )
         except Exception:
             return False
 
@@ -105,59 +139,113 @@ class RepackUnpacker:
         success = False
         error_msg = None
 
+        # Clean paths (strip trailing slashes to avoid Windows CLI quote-escaping bugs in subprocess)
+        clean_out = str(out).rstrip(r"\/")
+        clean_installer = str(installer).rstrip(r"\/")
+
         # 1. Inno Setup Check
         if suffix == ".exe" and self.is_inno_setup(installer):
             inno_bin = self.ensure_innoextract()
             if inno_bin:
                 extractor_used = "innoextract"
                 try:
-                    cmd = [str(inno_bin), "-e", "-d", str(out), str(installer)]
+                    cmd = [str(inno_bin), "-e", "-d", clean_out, clean_installer]
                     res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                     if res.returncode == 0:
                         success = True
+                        error_msg = None
                     else:
                         error_msg = res.stderr or res.stdout
+                except subprocess.TimeoutExpired:
+                    error_msg = "innoextract timed out after 300 seconds."
                 except Exception as e:
                     error_msg = str(e)
             else:
                 error_msg = "Inno Setup detected, but innoextract is not installed."
 
-        # 2. Native ZIP Archive Extraction
-        if not success and (suffix == ".zip" or zipfile.is_zipfile(installer)):
-            try:
-                with zipfile.ZipFile(installer, "r") as zf:
-                    zf.extractall(out)
-                extractor_used = "zipfile"
-                success = True
-            except Exception as e:
-                error_msg = str(e)
-
-        # 3. Archive / SFX Extraction via tar.exe or 7z
-        if not success:
-            seven_zip = shutil.which("7z") or shutil.which("7za")
+        # 2. NSIS Installer Check (extracted with 7z)
+        if not success and suffix == ".exe" and self.is_nsis_installer(installer):
+            seven_zip = self.ensure_7z()
             if seven_zip:
-                extractor_used = "7z"
+                extractor_used = "7z-nsis"
                 try:
-                    cmd = [seven_zip, "x", str(installer), f"-o{out}", "-y"]
+                    cmd = [str(seven_zip), "x", clean_installer, f"-o{clean_out}", "-y"]
                     res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                     if res.returncode == 0:
                         success = True
+                        error_msg = None
+                        # NSIS installers often unpack into $INSTDIR. If present, promote cleanly and delete temp dir
+                        instdir = out / "$INSTDIR"
+                        if instdir.exists() and instdir.is_dir():
+                            for root, _, n_files in os.walk(instdir):
+                                for nf in n_files:
+                                    src = Path(root) / nf
+                                    rel = src.relative_to(instdir)
+                                    dst = out / rel
+                                    dst.parent.mkdir(parents=True, exist_ok=True)
+                                    if not dst.exists():
+                                        try:
+                                            shutil.move(str(src), str(dst))
+                                        except Exception:
+                                            pass
+                            shutil.rmtree(instdir, ignore_errors=True)
+                        for temp_junk in (out / "$PLUGINSDIR", out / "$_OUTDIR"):
+                            if temp_junk.exists():
+                                shutil.rmtree(temp_junk, ignore_errors=True)
                     else:
                         error_msg = res.stderr or res.stdout
+                except subprocess.TimeoutExpired:
+                    error_msg = "7-Zip NSIS extraction timed out after 300 seconds."
                 except Exception as e:
                     error_msg = str(e)
 
-        # 4. Built-in Windows tar.exe (supports .tar, .7z, .iso, etc.)
+        # 3. Native ZIP Archive Extraction with Zip-Slip path traversal protection
+        if not success and (suffix == ".zip" or zipfile.is_zipfile(installer)):
+            try:
+                with zipfile.ZipFile(installer, "r") as zf:
+                    for member in zf.infolist():
+                        dest_file = (out / member.filename).resolve()
+                        if not dest_file.is_relative_to(out.resolve()):
+                            raise ValueError(f"Zip-Slip path traversal detected: {member.filename}")
+                    zf.extractall(out)
+                extractor_used = "zipfile"
+                success = True
+                error_msg = None
+            except Exception as e:
+                error_msg = str(e)
+
+        # 4. General Archive / SFX Extraction via 7z
+        if not success:
+            seven_zip = self.ensure_7z()
+            if seven_zip:
+                extractor_used = "7z"
+                try:
+                    cmd = [str(seven_zip), "x", clean_installer, f"-o{clean_out}", "-y"]
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    if res.returncode == 0:
+                        success = True
+                        error_msg = None
+                    else:
+                        error_msg = res.stderr or res.stdout
+                except subprocess.TimeoutExpired:
+                    error_msg = "7-Zip archive extraction timed out after 300 seconds."
+                except Exception as e:
+                    error_msg = str(e)
+
+        # 5. Built-in Windows tar.exe (supports .tar, .7z, .iso, etc.)
         if not success:
             tar_bin = shutil.which("tar.exe") or "tar.exe"
             extractor_used = "tar.exe"
             try:
-                cmd = [tar_bin, "-xf", str(installer), "-C", str(out)]
+                cmd = [tar_bin, "-xf", clean_installer, "-C", clean_out]
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if res.returncode == 0:
                     success = True
+                    error_msg = None
                 else:
                     error_msg = res.stderr or res.stdout
+            except subprocess.TimeoutExpired:
+                error_msg = "tar.exe timed out after 300 seconds."
             except Exception as e:
                 error_msg = str(e)
 
@@ -181,6 +269,8 @@ class RepackUnpacker:
                 cleaned_after_unpack = True
             except Exception as e:
                 error_msg = f"Extraction succeeded, but auto-clean failed: {e}"
+                cleaned_after_unpack = False
+                success = False
 
         return UnpackResult(
             installer_path=str(installer),

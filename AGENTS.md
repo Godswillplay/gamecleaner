@@ -24,7 +24,7 @@ python -m gamecleaner.cli setup --all
 python -m unittest discover tests
 ```
 
-Expected result: All 29 unit and integration tests must pass (`OK`).
+Expected result: All 301 unit and integration tests must pass (`OK`).
 
 ---
 
@@ -74,6 +74,139 @@ When a user asks to inspect a specific file or verify whether a hook is safe:
 python -m gamecleaner.cli inspect "D:\Games\<GameFolder>\<binary.dll>"
 ```
 This generates a detailed Capstone disassembly dossier and string cross-reference analysis in `REA_EVIDENCE_<binary>.md`.
+
+---
+
+### Scenario E: Cryptographic Game Integrity & Tamper Verification
+Audit whether any game binaries were corrupted, modified after sanitization, or if newly injected droppers appeared:
+```powershell
+python -m gamecleaner.cli verify "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario F: Dependency & Runtime Troubleshooting (DirectX / Visual C++ / OpenAL)
+Detect missing runtime DLLs and automatically run silent redist installers from `_CommonRedist/` or `redist/`:
+```powershell
+python -m gamecleaner.cli deps "D:\Games\<GameFolder>" --install
+```
+
+---
+
+### Scenario G: Audit DLL Search-Order Hijacking (Sideloaded System DLLs)
+Identify untrusted system DLLs (`version.dll`, `winhttp.dll`, `dxgi.dll`) and differentiate mod loaders (ReShade, BepInEx) from hostile proxies:
+```powershell
+python -m gamecleaner.cli sideload "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario H: Smart Isolated Game Launcher (Firewall Trap Remediation)
+Remediates any Windows Firewall inbound socket blocks, captures a save snapshot, verifies dependencies, and cleanly launches the game:
+```powershell
+python -m gamecleaner.cli run "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario I: Windows Exploit Protection Child-Process Blocker
+Hard-block game binaries from spawning hidden background miners or scripts:
+```powershell
+python -m gamecleaner.cli shield "D:\Games\<GameFolder>" --elevate
+```
+
+---
+
+### Scenario J: Kernel Driver & BYOVD Rootkit Inspection
+Audit all `.sys` driver binaries and driver service scripts against the LOLDrivers/BYOVD database:
+```powershell
+python -m gamecleaner.cli drivers "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario K: Steam Deck & Linux Proton Setup
+Generate POSIX Proton launch scripts with Wine DLL overrides and Linux network isolation:
+```powershell
+python -m gamecleaner.cli proton "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario L: Versioned Save Snapshots & Rollback
+Capture or restore point-in-time Goldberg save game archives:
+```powershell
+# Create snapshot
+python -m gamecleaner.cli save-sync "D:\Games\<GameFolder>" --snapshot
+
+# List and restore
+python -m gamecleaner.cli save-sync "D:\Games\<GameFolder>" --list
+python -m gamecleaner.cli save-sync "D:\Games\<GameFolder>" --restore "<snapshot_name>.zip"
+```
+
+---
+
+### Scenario M: Interactive Local Cyber Defense WebUI Dashboard
+Launch the zero-dependency local web dashboard and REST API with live telemetry dials, drag-and-drop triage, and one-click actions:
+```powershell
+python -m gamecleaner.cli web --open
+```
+
+---
+
+### Scenario N: Windows Event Log & WER Crash Forensics
+Diagnose why a cracked game crashed on startup or silently closed by parsing Windows Application Log (Event ID 1000/1001) and WER dumps:
+```powershell
+python -m gamecleaner.cli crash-log "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario O: Anti-Cheat & Binary Protector Triage
+Audit third-party anti-cheat suites (Easy Anti-Cheat, BattlEye, Vanguard) and binary protectors (Denuvo, VMProtect, Themida) for BYOVD kernel driver risks:
+```powershell
+python -m gamecleaner.cli anticheat "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario P: Game Mod & Hook Compatibility Audit
+Audit game mod frameworks (ReShade, Special K, BepInEx, Script Extenders, ASI loaders), detect proxy chains, and prevent malware from masquerading as mod loaders:
+```powershell
+python -m gamecleaner.cli mods "D:\Games\<GameFolder>"
+```
+
+---
+
+### Scenario Q: Epic Online Services (EOS) Emulation & Triage
+Triage Epic Online Services SDK binaries (`EOSSDK-Win64-Shipping.dll`), preserve catalog configs, and sanitize with clean emulator stubs:
+```powershell
+# Audit EOS targets
+python -m gamecleaner.cli eos "D:\Games\<GameFolder>"
+
+# Sanitize and replace with clean stubs
+python -m gamecleaner.cli eos "D:\Games\<GameFolder>" --clean
+```
+
+---
+
+### Scenario R: Live Process Memory & Injection Hook Audit
+Inspect loaded modules and detect unauthorized DLL injections from `%TEMP%`/`%APPDATA%`, detour hooks, or crypto miners in a running game process:
+```powershell
+python -m gamecleaner.cli mem-audit --name "Game.exe"
+```
+
+---
+
+### Scenario S: Universal Cloud Save Exporter & Importer
+Export portable save packages for Steam Deck / Ludusavi or import official Steam saves into Goldberg format:
+```powershell
+# Export for Steam Deck
+python -m gamecleaner.cli cloud-save "D:\Games\<GameFolder>" --export-deck
+
+# Import official Steam userdata
+python -m gamecleaner.cli cloud-save "D:\Games\<GameFolder>" --import-steam "C:\Program Files (x86)\Steam\userdata\<AccountID>\<AppID>"
+```
 
 ---
 

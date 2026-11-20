@@ -57,7 +57,8 @@ class EvidenceDossierCompiler:
             lines.append("| :--- | :--- | :--- | :--- | :--- |")
             for s in strings:
                 enc = "UTF-16" if s.is_wide else "ASCII"
-                lines.append(f"| `{s.category}` | `{s.value[:60]}` | `{s.section}` | `0x{s.offset:X}` | {enc} |")
+                safe_val = s.value[:60].replace("|", "\\|").replace("\r", " ").replace("\n", " ").replace("`", "'")
+                lines.append(f"| `{s.category}` | `{safe_val}` | `{s.section}` | `0x{s.offset:X}` | {enc} |")
         else:
             lines.append("- *No categorized C2, stealer, or anti-analysis strings discovered.*")
 

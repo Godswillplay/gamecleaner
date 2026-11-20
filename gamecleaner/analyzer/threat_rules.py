@@ -55,6 +55,18 @@ SENSITIVE_APIS: Dict[str, Dict[str, str]] = {
         "description": "Retrieves credentials from Windows Vault",
     },
 
+    # Virtual Memory & Hooking (Inline DRM hooks vs Injection)
+    "VirtualProtect": {
+        "category": ThreatCategory.HACKTOOL_CRACK.value,
+        "severity": ThreatSeverity.LOW.value,
+        "description": "Changes virtual memory page protection (standard for inline DRM hooks and unpackers)",
+    },
+    "VirtualProtectEx": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Changes virtual memory page protection inside an external target process",
+    },
+
     # Process Injection / Memory Hollowing (Used by stealth droppers)
     "WriteProcessMemory": {
         "category": ThreatCategory.INJECTION.value,
@@ -71,10 +83,45 @@ SENSITIVE_APIS: Dict[str, Dict[str, str]] = {
         "severity": ThreatSeverity.HIGH.value,
         "description": "Executes a thread in the address space of another process",
     },
+    "NtCreateThreadEx": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.HIGH.value,
+        "description": "Native syscall thread execution in target process",
+    },
+    "RtlCreateUserThread": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.HIGH.value,
+        "description": "Low-level user thread creation in remote process",
+    },
     "NtUnmapViewOfSection": {
         "category": ThreatCategory.INJECTION.value,
         "severity": ThreatSeverity.HIGH.value,
         "description": "Hollows out a legitimate process binary to replace it with payload",
+    },
+    "NtWriteVirtualMemory": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Native syscall writing directly into process memory",
+    },
+    "NtAllocateVirtualMemory": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Native syscall allocating virtual memory space",
+    },
+    "SetThreadContext": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.HIGH.value,
+        "description": "Modifies execution context (registers/EIP/RIP) of another thread",
+    },
+    "GetThreadContext": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Reads thread CPU register context for injection / hollowing",
+    },
+    "ResumeThread": {
+        "category": ThreatCategory.INJECTION.value,
+        "severity": ThreatSeverity.LOW.value,
+        "description": "Resumes thread execution (common in hollowed process launches)",
     },
     "QueueUserAPC": {
         "category": ThreatCategory.INJECTION.value,
@@ -135,6 +182,36 @@ SENSITIVE_APIS: Dict[str, Dict[str, str]] = {
         "severity": ThreatSeverity.MEDIUM.value,
         "description": "Sends HTTP request (frequently used for C2 data exfiltration)",
     },
+    "HttpSendRequestW": {
+        "category": ThreatCategory.NETWORK_C2.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Sends HTTP request (frequently used for C2 data exfiltration)",
+    },
+    "WinHttpOpen": {
+        "category": ThreatCategory.NETWORK_C2.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Initializes WinHttp network communication session",
+    },
+    "WinHttpConnect": {
+        "category": ThreatCategory.NETWORK_C2.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Connects WinHttp session to target host or C2 server",
+    },
+    "WinHttpOpenRequest": {
+        "category": ThreatCategory.NETWORK_C2.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Creates HTTP request handle for network payload transfer",
+    },
+    "WinHttpSendRequest": {
+        "category": ThreatCategory.NETWORK_C2.value,
+        "severity": ThreatSeverity.MEDIUM.value,
+        "description": "Transmits HTTP request over WinHttp",
+    },
+    "WSAStartup": {
+        "category": ThreatCategory.NETWORK_C2.value,
+        "severity": ThreatSeverity.LOW.value,
+        "description": "Initializes Windows Sockets network subsystem (standard for games/coop)",
+    },
 
     # Persistence
     "RegSetValueExA": {
@@ -163,15 +240,53 @@ SUSPICIOUS_STRING_PATTERNS = [
         "category": ThreatCategory.INFOSTEALER.value,
         "severity": ThreatSeverity.CRITICAL.value,
     },
+    # Modern Infostealers (Lumma, Stealc, Vidar, Redline)
     {
-        "pattern": re.compile(rb"stratum\+tcp://|stratum\+ssl://", re.IGNORECASE),
+        "pattern": re.compile(rb"lummac2|lumma(?:\s+stealer|_c2)|gate\.php\?act=|\.lumma\b", re.IGNORECASE),
+        "name": "Lumma Stealer C2 Signature",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+    },
+    {
+        "pattern": re.compile(rb"stealc(?:\s+stealer|/api/|_gate)|stealc_[a-z0-9]+", re.IGNORECASE),
+        "name": "Stealc Stealer Signature",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+    },
+    {
+        "pattern": re.compile(rb"vidar(?:\s+stealer|_api)|redline(?:\.client|stealer)|raccoon\s+stealer|agenttesla", re.IGNORECASE),
+        "name": "Vidar / Redline Infostealer Signature",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+    },
+    {
+        "pattern": re.compile(rb"(?:information\.txt|passwords\.txt|autofill\.txt|wallets\.txt|cards\.txt)[^\r\n]{0,200}(?:tokens\.txt|cookies\.txt)", re.IGNORECASE),
+        "name": "Infostealer Staging Artifacts",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+    },
+    # Cryptocurrency Miners & Stratum Protocol
+    {
+        "pattern": re.compile(rb"stratum(?:\+tcp|\+ssl|2\+tcp)?://", re.IGNORECASE),
         "name": "Mining Pool Stratum Protocol",
         "category": ThreatCategory.COINMINER.value,
         "severity": ThreatSeverity.CRITICAL.value,
     },
     {
-        "pattern": re.compile(rb"xmrig|cryptonight|randomx|supportxmr\.com|nanopool\.org", re.IGNORECASE),
-        "name": "Cryptocurrency Mining Artifacts",
+        "pattern": re.compile(
+            rb"nicehash\.com|minexmr\.com|supportxmr\.com|nanopool\.org|unmineable\.com|f2pool\.com|hashvault\.pro|moneroocean\.stream",
+            re.IGNORECASE,
+        ),
+        "name": "Mining Pool Domain Artifact",
+        "category": ThreatCategory.COINMINER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+    },
+    {
+        "pattern": re.compile(
+            rb"xmrig(?:\.exe)?|cryptonight|\brandomx\b|kawpow|ethminer|nbminer|phoenixminer|t-rex\.exe|srbminer|gupax|--donate-level",
+            re.IGNORECASE,
+        ),
+        "name": "Cryptocurrency Mining Engine Artifacts",
         "category": ThreatCategory.COINMINER.value,
         "severity": ThreatSeverity.CRITICAL.value,
     },

@@ -33,6 +33,12 @@ class ScriptScanResult:
     recommended_action: str = "KEEP"  # KEEP or QUARANTINE
 
 
+# Legitimate redistributable installers to exclude from Temp/AppData execution flags
+REDIST_EXE_REGEX = re.compile(
+    r"(?:dxsetup|dxwebsetup|vcredist[a-z0-9_\-\.]*|vc_redist[a-z0-9_\-\.]*|oalinst|dotNetFx[a-z0-9_\-\.]*)\.exe",
+    re.IGNORECASE,
+)
+
 SCRIPT_THREAT_PATTERNS = [
     {
         "pattern": re.compile(r"powershell(?:\.exe)?\s+.*-[eE](?:nc|ncodedcommand)?\s+[A-Za-z0-9+/=]{20,}", re.IGNORECASE),
@@ -63,7 +69,7 @@ SCRIPT_THREAT_PATTERNS = [
         "score": 35,
     },
     {
-        "pattern": re.compile(r"(?:Invoke-WebRequest|iwr\s+|DownloadFile|DownloadString)\s+.*https?://", re.IGNORECASE),
+        "pattern": re.compile(r"(?:Invoke-WebRequest|iwr\s+|Invoke-RestMethod|irm\s+|DownloadFile|DownloadString)\s+.*https?://|curl(?:\.exe)?\s+.*(?:-o|-O|--output)\s+", re.IGNORECASE),
         "name": "Scripted Web Payload Downloader",
         "category": ThreatCategory.NETWORK_C2.value,
         "severity": ThreatSeverity.HIGH.value,
@@ -83,6 +89,28 @@ SCRIPT_THREAT_PATTERNS = [
         "severity": ThreatSeverity.CRITICAL.value,
         "score": 50,
     },
+    # Modern Infostealers (Lumma, Stealc, Vidar, Redline)
+    {
+        "pattern": re.compile(r"lummac2|lumma(?:\s+stealer|_c2)|/api/v1/user|gate\.php\?act=|\.lumma\b", re.IGNORECASE),
+        "name": "Lumma Stealer C2 Signature",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+        "score": 50,
+    },
+    {
+        "pattern": re.compile(r"stealc(?:\s+stealer|/api/|_gate)|stealc_[a-z0-9]+", re.IGNORECASE),
+        "name": "Stealc Stealer Signature",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+        "score": 50,
+    },
+    {
+        "pattern": re.compile(r"vidar(?:\s+stealer|_api)|redline(?:\.client|stealer)|raccoon\s+stealer|agenttesla", re.IGNORECASE),
+        "name": "Vidar / Redline Infostealer Signature",
+        "category": ThreatCategory.INFOSTEALER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+        "score": 50,
+    },
     {
         "pattern": re.compile(r"vssadmin(?:\.exe)?\s+delete\s+shadows", re.IGNORECASE),
         "name": "Volume Shadow Copy Deletion (Ransomware)",
@@ -97,8 +125,22 @@ SCRIPT_THREAT_PATTERNS = [
         "severity": ThreatSeverity.HIGH.value,
         "score": 25,
     },
+    # Cryptocurrency Mining Artifacts & Pools
     {
-        "pattern": re.compile(r"stratum\+tcp://|stratum\+ssl://|xmrig", re.IGNORECASE),
+        "pattern": re.compile(
+            r"stratum(?:\+tcp|\+ssl|2\+tcp)?://|nicehash\.com|minexmr\.com|supportxmr\.com|nanopool\.org|unmineable\.com|moneroocean\.stream",
+            re.IGNORECASE,
+        ),
+        "name": "Mining Pool Protocol / Domain",
+        "category": ThreatCategory.COINMINER.value,
+        "severity": ThreatSeverity.CRITICAL.value,
+        "score": 50,
+    },
+    {
+        "pattern": re.compile(
+            r"xmrig(?:\.exe)?|cryptonight|randomx|--donate-level|--algo=(?:cryptonight|randomx|kawpow)|nbminer|ethminer|phoenixminer",
+            re.IGNORECASE,
+        ),
         "name": "Cryptocurrency Mining Artifacts",
         "category": ThreatCategory.COINMINER.value,
         "severity": ThreatSeverity.CRITICAL.value,
@@ -142,12 +184,20 @@ class ScriptScanner:
 
         for idx, line in enumerate(lines, start=1):
             stripped = line.strip()
-            # Skip empty lines or standard batch comments
-            if not stripped or stripped.startswith("::") or stripped.startswith("REM ") or stripped.startswith("#"):
+            # Skip empty lines or standard batch comments (case-insensitive REM)
+            stripped_upper = stripped.upper()
+            if not stripped or stripped.startswith("::") or stripped_upper.startswith("REM ") or stripped_upper == "REM" or stripped.startswith("#"):
                 continue
 
+            # De-obfuscate batch caret insertions (c^m^d) and quote splits (p""o""w""e""r)
+            deobf_line = stripped.replace("^", "").replace('""', '')
+
             for rule in SCRIPT_THREAT_PATTERNS:
-                if rule["pattern"].search(line):
+                if rule["pattern"].search(line) or rule["pattern"].search(deobf_line):
+                    # Prevent false positives on legitimate DirectX/VCRedist installers executed from temp
+                    if rule["name"] == "Execution from Temp/AppData Directory" and (REDIST_EXE_REGEX.search(line) or REDIST_EXE_REGEX.search(deobf_line)):
+                        continue
+
                     result.findings.append(ScriptFinding(
                         category=rule["category"],
                         severity=rule["severity"],

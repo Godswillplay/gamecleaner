@@ -65,17 +65,26 @@ class TestPipelineE2E(unittest.TestCase):
         quarantined_files = list(quarantine_dir.glob("*.quarantined"))
         self.assertEqual(len(quarantined_files), 2)
 
-        # Check firewall scripts
+        # Check firewall scripts & Fix_Firewall_And_Run.bat
         self.assertTrue((self.game_dir / "block_game_network.ps1").exists())
         self.assertTrue((self.game_dir / "unblock_game_network.ps1").exists())
+        self.assertTrue((self.game_dir / "Fix_Firewall_And_Run.bat").exists())
+        self.assertIsNotNone(report.fix_firewall_script_created)
 
-        # Check sandbox file
+        # Check sandbox file & batch runner
         wsb_files = list(self.game_dir.glob("Sandbox_*.wsb"))
         self.assertEqual(len(wsb_files), 1)
+        self.assertTrue((self.game_dir / "Launch_Game_Isolated.bat").exists())
 
         # Check reports
         self.assertTrue((self.game_dir / "gamecleaner_report.json").exists())
         self.assertTrue((self.game_dir / "gamecleaner_report.md").exists())
+
+        md_content = (self.game_dir / "gamecleaner_report.md").read_text(encoding="utf-8")
+        self.assertIn("## Summary", md_content)
+        self.assertIn("## Quarantined Binaries", md_content)
+        self.assertIn("## Containment Recommendations", md_content)
+        self.assertIn("Fix_Firewall_And_Run.bat", md_content)
 
 
 if __name__ == "__main__":

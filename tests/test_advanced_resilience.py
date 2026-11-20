@@ -108,6 +108,53 @@ class TestAdvancedResilience(unittest.TestCase):
         content = out_dlc.read_text(encoding="utf-8")
         self.assertIn("378648=The Witcher 3", content)
 
+    def test_repack_ini_dlc_parsing_in_subdirectories_and_reverse_format(self):
+        """Verify discovering INIs in nested subdirectories and parsing inverted DLC001=appid syntax."""
+        sub = self.test_dir / "bin" / "x64"
+        sub.mkdir(parents=True)
+        ini_file = sub / "creamapi.ini"
+        ini_file.write_text(
+            "[dlc_list]\n"
+            "DLC_01 = 123456 ; Expansion Alpha\n"
+            "789012 = Expansion Beta # inline comment\n",
+            encoding="utf-8",
+        )
+
+        fetcher = SteamDLCFetcher()
+        dlcs = fetcher.parse_local_ini_dlcs(self.test_dir)
+        self.assertEqual(len(dlcs), 2)
+        dlc_ids = {d.app_id for d in dlcs}
+        self.assertIn("123456", dlc_ids)
+        self.assertIn("789012", dlc_ids)
+
+    def test_quarantine_path_traversal_prevention(self):
+        """Verify that restore_file prevents directory traversal attempts in manifest original_rel_path."""
+        qm = QuarantineManager(self.test_dir)
+        qm._ensure_dir()
+
+        # Create a mock quarantined file
+        q_file = qm.quarantine_dir / "malware.exe_20261120_120000.quarantined"
+        q_file.write_bytes(b"MZMockPayload")
+
+        # Create manifest with directory traversal payload
+        manifest = {
+            q_file.name: {
+                "original_rel_path": "../../evil_escape.exe",
+                "quarantined_filename": q_file.name,
+                "sha256": "fake_sha",
+                "reason": "Test traversal",
+                "timestamp": "2026-11-20T12:00:00",
+            }
+        }
+        qm._save_manifest(manifest)
+
+        restored = qm.restore_file(q_file.name)
+        self.assertTrue(restored)
+
+        # File should have been restored inside self.test_dir, NEVER outside
+        self.assertFalse((self.test_dir.parent.parent / "evil_escape.exe").exists())
+        self.assertTrue((self.test_dir / "evil_escape.exe").exists())
+
     def test_firewall_rule_length_and_quoting(self):
         """Verify firewall rule name lengths stay within 255 chars and handle quotes."""
         # Create a deep directory name

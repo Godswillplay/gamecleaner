@@ -138,6 +138,7 @@ class PEScanResult:
     sections: List[SectionInfo] = field(default_factory=list)
     imports: Dict[str, List[str]] = field(default_factory=dict)
     exports: List[str] = field(default_factory=list)
+    sensitive_imports_found: List[str] = field(default_factory=list)
     is_steam_wrapper: bool = False
     findings: List[ThreatFinding] = field(default_factory=list)
     threat_score: int = 0  # 0 to 100
@@ -196,7 +197,13 @@ def check_authenticode_signature(file_path: Path) -> str:
         trust_status = "NotSigned"
 
     # 2. For Windows system catalog-signed files (only in Windows system directories)
-    if "windows" in file_str.lower():
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve()
+    try:
+        is_in_system = system_root in file_path.resolve().parents
+    except Exception:
+        is_in_system = False
+
+    if is_in_system:
         try:
             # Use param($p) so file paths with quotes/spaces are passed strictly as data, never evaluated
             proc = subprocess.run(
@@ -304,11 +311,13 @@ class PEScanner:
             result.is_signed = (result.signature_status == "Valid")
 
             if result.has_security_directory and result.signature_status == "HashMismatch":
+                # Scene cracks routinely modify signed game executables to bypass DRM checks.
+                # Mark as HACKTOOL_CRACK / MEDIUM severity so cracked game EXEs are preserved.
                 result.findings.append(ThreatFinding(
-                    category=ThreatCategory.INJECTION.value,
-                    severity=ThreatSeverity.CRITICAL.value,
-                    name="Tampered / Forged Digital Signature",
-                    details="Embedded certificate hash does not match binary contents (malware patching indicator)",
+                    category=ThreatCategory.HACKTOOL_CRACK.value,
+                    severity=ThreatSeverity.MEDIUM.value,
+                    name="Modified Signed Executable (Crack / Patch)",
+                    details="Authenticode digest modified from original publisher signature (typical scene crack patch)",
                 ))
             elif result.has_security_directory and result.signature_status in ("NotTrusted", "UnknownError"):
                 result.findings.append(ThreatFinding(
@@ -355,6 +364,7 @@ class PEScanner:
             sec_name = sec.Name.decode(errors="ignore").strip("\x00")
             entropy = sec.get_entropy()
             is_exec = bool(sec.Characteristics & 0x20000000)
+            is_write = bool(sec.Characteristics & 0x80000000)
             is_suspicious = (entropy >= self.high_entropy_threshold and sec.SizeOfRawData > 4096)
 
             if entropy > result.max_entropy:
@@ -365,6 +375,21 @@ class PEScanner:
                 if tag.lower() in sec_name.lower():
                     result.is_packed = True
                     result.packer_type = packer_name
+                    result.findings.append(ThreatFinding(
+                        category=ThreatCategory.PACKED_OBFUSCATED.value,
+                        severity=ThreatSeverity.MEDIUM.value,
+                        name=f"Packer Signature: {packer_name}",
+                        details=f"Detected known packer section '{sec_name}'",
+                    ))
+
+            # W^X (Writable and Executable) section violation check (code injection / unpacker buffer)
+            if is_exec and is_write and sec.SizeOfRawData > 512:
+                result.findings.append(ThreatFinding(
+                    category=ThreatCategory.INJECTION.value,
+                    severity=ThreatSeverity.MEDIUM.value,
+                    name="Writable & Executable (W^X) Section Violation",
+                    details=f"Section '{sec_name}' has both IMAGE_SCN_MEM_WRITE and IMAGE_SCN_MEM_EXECUTE flags (self-modifying/shellcode indicator)",
+                ))
 
             result.sections.append(SectionInfo(
                 name=sec_name,
@@ -379,27 +404,37 @@ class PEScanner:
             result.is_packed = True
             if not result.packer_type:
                 result.packer_type = "Generic High-Entropy Crypter/Packer"
-            result.findings.append(ThreatFinding(
-                category=ThreatCategory.PACKED_OBFUSCATED.value,
-                severity=ThreatSeverity.MEDIUM.value,
-                name="Packed or Encrypted Executable",
-                details=f"Detected maximum section entropy of {result.max_entropy} ({result.packer_type})",
-            ))
+            if not any(f.name.startswith("Packer Signature:") for f in result.findings):
+                result.findings.append(ThreatFinding(
+                    category=ThreatCategory.PACKED_OBFUSCATED.value,
+                    severity=ThreatSeverity.MEDIUM.value,
+                    name="Packed or Encrypted Executable",
+                    details=f"Detected maximum section entropy of {result.max_entropy} ({result.packer_type})",
+                ))
 
     def _analyze_imports(self, pe: pefile.PE, result: PEScanResult):
         if not hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
             return
 
         for entry in pe.DIRECTORY_ENTRY_IMPORT:
+            if not entry.dll:
+                continue
             dll_name = entry.dll.decode(errors="ignore").lower()
             imports_list = []
             for imp in entry.imports:
+                func_name = None
                 if imp.name:
                     func_name = imp.name.decode(errors="ignore")
+                elif hasattr(imp, "ordinal") and imp.ordinal is not None:
+                    func_name = f"Ordinal_{imp.ordinal}"
+
+                if func_name:
                     imports_list.append(func_name)
                     # Match against sensitive APIs
                     if func_name in SENSITIVE_APIS:
                         rule = SENSITIVE_APIS[func_name]
+                        if func_name not in result.sensitive_imports_found:
+                            result.sensitive_imports_found.append(func_name)
                         result.findings.append(ThreatFinding(
                             category=rule["category"],
                             severity=rule["severity"],
@@ -451,9 +486,11 @@ class PEScanner:
                 # Read up to 25MB for string inspection to maintain performance
                 content = f.read(25 * 1024 * 1024)
 
+            matched_rules = set()
             for item in SUSPICIOUS_STRING_PATTERNS:
                 matches = item["pattern"].findall(content)
                 if matches:
+                    matched_rules.add(item["name"])
                     sample = matches[0].decode(errors="ignore")[:60]
                     result.findings.append(ThreatFinding(
                         category=item["category"],
@@ -461,6 +498,34 @@ class PEScanner:
                         name=f"Pattern: {item['name']}",
                         details=f"Detected payload signature: '{sample}'",
                     ))
+
+            # UTF-16LE wide string scanning (catches payloads compiled with wide strings or .NET)
+            wide_runs = re.finditer(rb"(?:[\x20-\x7E]\x00){8,128}", content)
+            wide_text_chunks = []
+            for wr in wide_runs:
+                try:
+                    wide_text_chunks.append(wr.group(0).decode("utf-16le", errors="ignore"))
+                except Exception:
+                    continue
+
+            if wide_text_chunks:
+                joined_wide = "\n".join(wide_text_chunks)
+                for item in SUSPICIOUS_STRING_PATTERNS:
+                    if item["name"] in matched_rules:
+                        continue
+                    try:
+                        t_pat = re.compile(item["pattern"].pattern.decode("ascii", errors="ignore"), re.IGNORECASE)
+                        w_match = t_pat.search(joined_wide)
+                        if w_match:
+                            sample = w_match.group(0)[:60]
+                            result.findings.append(ThreatFinding(
+                                category=item["category"],
+                                severity=item["severity"],
+                                name=f"Wide Pattern: {item['name']}",
+                                details=f"Detected UTF-16LE payload signature: '{sample}'",
+                            ))
+                    except Exception:
+                        continue
         except Exception:
             pass
 
@@ -495,6 +560,21 @@ class PEScanner:
             high_count = 0
             medium_count = 0
 
+        # Prevent false positives on legitimate DirectX, VCRedist, and OpenAL prerequisite installers
+        file_lower = result.file_name.lower()
+        path_lower = str(result.file_path).lower()
+        is_redist_binary = (
+            file_lower.startswith(("vcredist", "vc_redist", "dxsetup", "dxwebsetup", "oalinst", "directx_"))
+            or file_lower in ("dotnetfx40_full_x86_x64.exe", "installscript.vdf")
+            or any(sub in path_lower for sub in ("\\_redist\\", "\\_commonredist\\", "\\redist\\", "\\directx\\", "\\vcredist\\"))
+        )
+        # Security hardening: Only grant redist discount if NO critical threats AND NO high severity threats are detected
+        # (prevents malware droppers placed in _redist from evading detection)
+        if is_redist_binary and critical_count == 0 and high_count == 0:
+            score = 0
+            medium_count = 0
+            result.is_packed = False
+
         result.threat_score = min(score, 100)
 
         # Categorize overall severity and verdict
@@ -510,6 +590,10 @@ class PEScanner:
             result.overall_severity = ThreatSeverity.CRITICAL.value
             result.verdict = "CRITICAL: Hostile Payload / Dropper"
             result.recommended_action = "QUARANTINE"
+        elif is_redist_binary:
+            result.overall_severity = ThreatSeverity.CLEAN.value
+            result.verdict = "CLEAN: Microsoft / DirectX / VC++ Redistributable Installer"
+            result.recommended_action = "KEEP"
         elif high_count > 0:
             result.overall_severity = ThreatSeverity.HIGH.value
             result.verdict = "HIGH RISK: Suspicious Injection / Downloader"

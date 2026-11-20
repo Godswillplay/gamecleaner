@@ -6,43 +6,54 @@ import re
 from typing import Dict, List, Set
 
 
-# Common Steamworks interface prefixes
-INTERFACE_PATTERNS = [
-    re.compile(rb"SteamClient[0-9]{3}"),
-    re.compile(rb"SteamUser[0-9]{3}"),
-    re.compile(rb"SteamFriends[0-9]{3}"),
-    re.compile(rb"SteamUtils[0-9]{3}"),
-    re.compile(rb"SteamMatchmaking[0-9]{3}"),
-    re.compile(rb"SteamMatchmakingServers[0-9]{3}"),
-    re.compile(rb"SteamUserStats[0-9]{3}"),
-    re.compile(rb"SteamApps[0-9]{3}"),
-    re.compile(rb"SteamNetworking[0-9]{3}"),
-    re.compile(rb"SteamRemoteStorage[0-9]{3}"),
-    re.compile(rb"SteamScreenshots[0-9]{3}"),
-    re.compile(rb"SteamHTTP[0-9]{3}"),
-    re.compile(rb"SteamController[0-9]{3}"),
-    re.compile(rb"STEAMCONTROLLER_INTERFACE_VERSION[0-9]{3}"),
-    re.compile(rb"SteamUGC[0-9]{3}"),
-    re.compile(rb"SteamAppList[0-9]{3}"),
-    re.compile(rb"SteamMusic[0-9]{3}"),
-    re.compile(rb"SteamMusicRemote[0-9]{3}"),
-    re.compile(rb"SteamHTMLSurface[0-9]{3}"),
-    re.compile(rb"SteamInventory[0-9]{3}"),
-    re.compile(rb"SteamVideo[0-9]{3}"),
-    re.compile(rb"SteamParentalSettings[0-9]{3}"),
-    re.compile(rb"SteamInput[0-9]{3}"),
-    re.compile(rb"SteamNetworkingSockets[0-9]{3}"),
-    re.compile(rb"SteamNetworkingUtils[0-9]{3}"),
+# Single unified pattern for fast ASCII interface string matching
+UNIFIED_INTERFACE_REGEX_BYTES = re.compile(
+    rb"(?:Steam[A-Za-z]+|STEAMCONTROLLER_INTERFACE_VERSION)[0-9]{3}"
+)
+
+# Unified pattern for UTF-16LE wide interface strings
+UNIFIED_INTERFACE_WIDE_BYTES = re.compile(
+    rb"(?:(?:S\x00t\x00e\x00a\x00m\x00[A-Za-z]\x00(?:[A-Za-z]\x00)*)|"
+    rb"(?:S\x00T\x00E\x00A\x00M\x00C\x00O\x00N\x00T\x00R\x00O\x00L\x00L\x00E\x00R\x00_\x00I\x00N\x00T\x00E\x00R\x00F\x00A\x00C\x00E\x00_\x00V\x00E\x00R\x00S\x00I\x00O\x00N\x00))"
+    rb"[0-9]\x00[0-9]\x00[0-9]\x00"
+)
+
+INTERFACE_PATTERNS_STR = [
+    re.compile(r"Steam[A-Za-z]+[0-9]{3}"),
+    re.compile(r"STEAMCONTROLLER_INTERFACE_VERSION[0-9]{3}"),
 ]
+
+
+def deduplicate_highest_interfaces(interfaces: List[str]) -> List[str]:
+    """
+    Given a list of interface strings (e.g. ['SteamUser019', 'SteamUser021']),
+    keeps only the highest version number for each interface family.
+    """
+    version_map: Dict[str, int] = {}
+    interface_name_map: Dict[str, str] = {}
+
+    pattern = re.compile(r"^(.*?)([0-9]{3})$")
+    for iface in interfaces:
+        m = pattern.match(iface)
+        if m:
+            prefix, ver_str = m.group(1), m.group(2)
+            ver = int(ver_str)
+            if prefix not in version_map or ver > version_map[prefix]:
+                version_map[prefix] = ver
+                interface_name_map[prefix] = f"{prefix}{ver_str}"
+        else:
+            interface_name_map[iface] = iface
+
+    return sorted(list(interface_name_map.values()))
 
 
 class InterfaceExtractor:
     """Extracts Steamworks interface versions directly from game executables and DLLs."""
 
     def extract_from_binary(self, binary_path: Path) -> List[str]:
-        """Scans a binary for all referenced Steam interface version strings."""
+        """Scans a binary for all referenced Steam interface version strings in ASCII and UTF-16LE."""
         binary_path = Path(binary_path)
-        if not binary_path.exists():
+        if not binary_path.exists() or not binary_path.is_file():
             return []
 
         try:
@@ -52,13 +63,30 @@ class InterfaceExtractor:
 
         found_interfaces: Set[str] = set()
 
-        for pattern in INTERFACE_PATTERNS:
-            matches = pattern.findall(content)
-            for m in matches:
-                try:
-                    found_interfaces.add(m.decode("ascii"))
-                except Exception:
-                    continue
+        # 1. Fast unified ASCII interface extraction
+        for m in UNIFIED_INTERFACE_REGEX_BYTES.finditer(content):
+            try:
+                found_interfaces.add(m.group(0).decode("ascii"))
+            except Exception:
+                continue
+
+        # 2. Fast unified UTF-16LE wide interface extraction
+        for m in UNIFIED_INTERFACE_WIDE_BYTES.finditer(content):
+            try:
+                found_interfaces.add(m.group(0).decode("utf-16le"))
+            except Exception:
+                continue
+
+        # 3. Fallback scan on wide string chunks (for variable-spaced or unicode text)
+        wide_matches = re.finditer(rb"(?:[\x20-\x7E]\x00){10,45}", content)
+        for wm in wide_matches:
+            try:
+                decoded = wm.group(0).decode("utf-16le")
+                for pattern in INTERFACE_PATTERNS_STR:
+                    for m in pattern.findall(decoded):
+                        found_interfaces.add(m)
+            except Exception:
+                continue
 
         return sorted(list(found_interfaces))
 
